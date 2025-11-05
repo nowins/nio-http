@@ -1,5 +1,6 @@
 package com.nowin.server;
 
+import com.nowin.util.BufferPool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,8 +23,7 @@ import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ExecutorService;
+import java.util.concurrent.*;
 
 public class NioHttpServer {
     private static final Logger logger = LoggerFactory.getLogger(NioHttpServer.class);
@@ -35,6 +35,8 @@ public class NioHttpServer {
     private VirtualHost defaultVirtualHost;
     private Router router;
     private ExecutorService executorService;
+    // 在类中新增字段
+    private ScheduledExecutorService timeoutChecker;
 
     private final ConcurrentLinkedQueue<PendingKey> pendingKeys = new ConcurrentLinkedQueue<>();
 
@@ -60,6 +62,28 @@ public class NioHttpServer {
         this.router = router;
     }
 
+    private void startTimeoutChecker(int timeoutMs, int checkIntervalMs) {
+        timeoutChecker = Executors.newSingleThreadScheduledExecutor();
+        timeoutChecker.scheduleAtFixedRate(() -> {
+            while (isRunning) {
+                for (SelectionKey key : selector.keys()) {
+                    try {
+                        if (key.attachment() instanceof HttpAtta) {
+                            HttpAtta atta = (HttpAtta) key.attachment();
+                            if (atta.isTimeout(timeoutMs)) {
+                                logger.debug("Closing timed out connection: {}", ((SocketChannel)key.channel()).getRemoteAddress());
+                                pendingKeys.add(new PendingKey(key, PendingKey.OP_CLOSE));
+                                selector.wakeup();
+                            }
+                        }
+                    } catch (Exception e) {
+                        logger.error("Error in timeout checker", e);
+                    }
+                }
+            }
+        }, checkIntervalMs, checkIntervalMs, TimeUnit.MILLISECONDS);
+    }
+
     public void start() throws IOException {
         isRunning = true;
         selector = Selector.open();
@@ -67,6 +91,7 @@ public class NioHttpServer {
         serverSocketChannel.bind(new InetSocketAddress(port));
         serverSocketChannel.configureBlocking(false);
         serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
+//        startTimeoutChecker(60_000, 10_000);
 
         logger.info("HTTP server started on port {}", port);
 
@@ -147,41 +172,45 @@ public class NioHttpServer {
     private void handleRead(SocketChannel clientChannel, SelectionKey key) throws IOException {
         // Get or create parser for this channel
         HttpAtta atta = (HttpAtta) key.attachment();
+        atta.updateActivityTime();
         // Read data from channel
-        ByteBuffer buffer = ByteBuffer.allocate(4096);
-        int bytesRead = clientChannel.read(buffer);
-
-        if (bytesRead == -1) {
-            // Connection closed by client
-            logger.debug("Client closed connection: {}", clientChannel.getRemoteAddress());
-            key.cancel();
-            clientChannel.close();
-            return;
-        }
-
-        if (bytesRead > 0) {
-            buffer.flip();
-            HttpRequest request = atta.getParser().parse(buffer);
-            atta.setRequest(request);
-
-            if (atta.getParser().hasError()) {
-                sendErrorResponse(key, 400, "Bad Request");
+        ByteBuffer buffer = BufferPool.DEFAULT.acquire();
+        try {
+            int bytesRead = clientChannel.read(buffer);
+            if (bytesRead == -1) {
+                // Connection closed by client
+                logger.debug("Client closed connection: {}", clientChannel.getRemoteAddress());
                 key.cancel();
                 clientChannel.close();
                 return;
             }
 
-            if (request != null) {
-                // Request is complete, process it
-                processRequest(clientChannel, key, request);
-                atta.getParser().reset();
+            if (bytesRead > 0) {
+                buffer.flip();
+                HttpRequest request = atta.getParser().parse(buffer);
+                atta.setRequest(request);
 
-                // If keep-alive is not enabled, close the connection
-                if (!request.isKeepAlive()) {
+                if (atta.getParser().hasError()) {
+                    sendErrorResponse(key, 400, "Bad Request");
                     key.cancel();
                     clientChannel.close();
+                    return;
+                }
+
+                if (request != null) {
+                    // Request is complete, process it
+                    processRequest(clientChannel, key, request);
+                    atta.getParser().reset();
+
+                    // If keep-alive is not enabled, close the connection
+                    if (!request.isKeepAlive()) {
+                        key.cancel();
+                        clientChannel.close();
+                    }
                 }
             }
+        } finally {
+            BufferPool.DEFAULT.release(buffer);
         }
     }
 
@@ -242,12 +271,16 @@ public class NioHttpServer {
         HttpAtta atta = (HttpAtta) key.attachment();
         try {
             // make sure all data is written
-            clientChannel.write(buffer);
-            logger.debug("try to write data to {}", clientChannel.getRemoteAddress());
-            if (buffer.hasRemaining()) {
-                atta.addToWrite(buffer);
-                pendingKeys.add(new PendingKey(key, PendingKey.OP_WRITE));
-                selector.wakeup();
+            while (buffer.hasRemaining()) {
+                int written = clientChannel.write(buffer);
+                logger.debug("try to write data {} byte data to {}", written, clientChannel.getRemoteAddress());
+                if (written == 0) {
+                    atta.addToWrite(ByteBuffer.wrap(buffer.array(), buffer.position(), buffer.remaining()));
+                    logger.debug("add remaining {} byte data to pending list {}", buffer.remaining(), clientChannel.getRemoteAddress());
+                    pendingKeys.add(new PendingKey(key, PendingKey.OP_WRITE));
+                    selector.wakeup();
+                    break;
+                }
             }
         } catch (IOException e) {
             logger.error("Error writing response", e);
@@ -258,29 +291,43 @@ public class NioHttpServer {
 
     private void handleWrite(SelectionKey key) throws IOException {
         HttpAtta atta = (HttpAtta) key.attachment();
+        atta.updateActivityTime();
         LinkedList<ByteBuffer> writeList = atta.getWriteList();
         SocketChannel clientChannel = (SocketChannel) key.channel();
         while (!writeList.isEmpty()) {
             ByteBuffer buffer = writeList.getFirst();
-            clientChannel.write(buffer);
-            logger.debug("Writing data to {}", clientChannel.getRemoteAddress());
+            int written = clientChannel.write(buffer);
+            logger.debug("write {} byte data to {}", written, clientChannel.getRemoteAddress());
+            if (written == 0) {
+                break;  // cannot write temporarily
+            }
             if (buffer.hasRemaining()) {
                 break;
             }
             writeList.removeFirst();  // all data is written, remove it
         }
         // check if we need to close the channel
-        if (writeList.isEmpty()) {
-            if (atta.getRequest().isKeepAlive()) {
-                pendingKeys.add(new PendingKey(key, PendingKey.OP_READ));
-            } else {
-                pendingKeys.add(new PendingKey(key, PendingKey.OP_CLOSE));
-            }
+        if (writeList.isEmpty() && atta.getRequest() != null && atta.getRequest().isKeepAlive()) {
+            key.interestOps(SelectionKey.OP_READ);
+        } else if (writeList.isEmpty()) {
+            pendingKeys.add(new PendingKey(key, PendingKey.OP_CLOSE));
+            selector.wakeup();
         }
     }
 
     public void stop() {
         isRunning = false;
+        if (timeoutChecker != null) {
+            timeoutChecker.shutdown();
+            try {
+                if (!timeoutChecker.awaitTermination(5, TimeUnit.SECONDS)) {
+                    timeoutChecker.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                timeoutChecker.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
         if (selector != null) {
             try {
                 selector.close();
