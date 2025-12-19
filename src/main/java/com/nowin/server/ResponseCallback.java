@@ -15,6 +15,6 @@ public class ResponseCallback {
     }
 
     public void onResponse(HttpResponse response) {
-        server.tryWrite(key, response);
+//        server.tryWrite(key, response);
     }
 }
