@@ -19,7 +19,7 @@ public class HttpRequestParser {
         START_LINE, HEADERS, BODY, COMPLETE, ERROR
     }
 
-    private ByteArrayOutputStream lineBuffer = new ByteArrayOutputStream(256);
+    private final ByteArrayOutputStream lineBuffer = new ByteArrayOutputStream(256);
     private ParseState state = ParseState.START_LINE;
     private HttpRequest request = new HttpRequest();
     private BodyParser bodyParser;

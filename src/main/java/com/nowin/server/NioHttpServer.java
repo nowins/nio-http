@@ -1,57 +1,96 @@
 package com.nowin.server;
 
-import com.nowin.util.BufferPool;
+import com.nowin.core.EventLoopGroup;
+import com.nowin.core.handler.AcceptHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.nowin.handler.HttpHandler;
-import com.nowin.http.HttpAtta;
-import com.nowin.http.HttpExchange;
-import com.nowin.http.HttpRequest;
-import com.nowin.http.HttpResponse;
-import com.nowin.server.WorkerPoolFactory.PoolInfo;
-
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.nio.channels.Selector;
 import java.nio.channels.ServerSocketChannel;
-import java.nio.channels.SocketChannel;
 import java.nio.channels.SelectionKey;
-import java.nio.ByteBuffer;
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.LinkedList;
+import java.nio.channels.spi.SelectorProvider;
 import java.util.Map;
-import java.util.Set;
-import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class NioHttpServer {
+
     private static final Logger logger = LoggerFactory.getLogger(NioHttpServer.class);
-    private final int port;
-    private Selector selector;
+
+    private EventLoopGroup bossGroup;
+    private EventLoopGroup workerGroup;
     private ServerSocketChannel serverSocketChannel;
-    private volatile boolean isRunning;
-    private final Map<String, VirtualHost> virtualHosts = new HashMap<>();
+
+    private Map<String, VirtualHost> virtualHosts;
     private VirtualHost defaultVirtualHost;
-    private Router router;
-    private ExecutorService executorService;
-    // 在类中新增字段
-    private ScheduledExecutorService timeoutChecker;
+    private Router router = new Router();
 
-    private final ConcurrentLinkedQueue<PendingKey> pendingKeys = new ConcurrentLinkedQueue<>();
+    private final AtomicBoolean running = new AtomicBoolean(false);
 
-    public NioHttpServer(int port) {
-        this.port = port;
-        PoolInfo poolInfo = WorkerPoolFactory.newWorker(true, null, null, null, "linked", 1024 * 20, "worker");
-        executorService = poolInfo.getPool();
+    private ServerConfig config;
+
+    public NioHttpServer(ServerConfig config) {
+        this.config = config;
     }
 
-    // Getters and Setters
-    public void setVirtualHosts(Map<String, VirtualHost> virtualHosts) {
-        this.virtualHosts.clear();
-        if (virtualHosts != null) {
-            this.virtualHosts.putAll(virtualHosts);
+    public void start() throws IOException {
+        if (running.compareAndSet(false, true)) {
+            try {
+                initEventLoopGroup();
+                bind();
+                startAcceptor();
+                startWorker();
+
+                Runtime.getRuntime().addShutdownHook(new Thread(this::shutdown, "NioHttpServer-ShutdownHook"));
+                logger.info("NioHttpServer started.");
+            } catch (IOException e) {
+                running.set(false);
+                logger.error("Failed to start NioHttpServer.", e);
+                throw e;
+            }
         }
+    }
+
+    private void initEventLoopGroup() {
+        logger.info("Initializing event loop groups.");
+        if (config.getBossThreads() == 1) {
+            bossGroup = new EventLoopGroup(1);
+        } else {
+            bossGroup = new EventLoopGroup(config.getBossThreads());
+        }
+
+        int workerThreads = config.getWorkerThreads() <= 0 ? Runtime.getRuntime().availableProcessors() * 2 : config.getWorkerThreads();
+        workerGroup = new EventLoopGroup(workerThreads);
+    }
+
+    private void bind() throws IOException {
+        logger.info("Binding to {}:{}", config.getHost(), config.getPort());
+        serverSocketChannel = SelectorProvider.provider().openServerSocketChannel();
+        serverSocketChannel.configureBlocking(false);
+        serverSocketChannel.socket().setReuseAddress(true);
+
+        InetSocketAddress address = new InetSocketAddress(config.getHost(), config.getPort());
+        serverSocketChannel.bind(address);
+
+        bossGroup.next().register(serverSocketChannel, SelectionKey.OP_ACCEPT, new AcceptHandler(workerGroup, virtualHosts, defaultVirtualHost, router));
+    }
+
+    private void startAcceptor() {
+        logger.info("Starting acceptor.");
+        bossGroup.start();
+    }
+
+    private void startWorker() {
+        logger.info("Starting worker.");
+        workerGroup.start();
+    }
+
+    public void shutdown() {
+
+    }
+
+    public void setVirtualHosts(Map<String, VirtualHost> virtualHosts) {
+        this.virtualHosts = virtualHosts;
     }
 
     public void setDefaultVirtualHost(VirtualHost defaultVirtualHost) {
@@ -60,299 +99,5 @@ public class NioHttpServer {
 
     public void setRouter(Router router) {
         this.router = router;
-    }
-
-    private void startTimeoutChecker(int timeoutMs, int checkIntervalMs) {
-        timeoutChecker = Executors.newSingleThreadScheduledExecutor();
-        timeoutChecker.scheduleAtFixedRate(() -> {
-            while (isRunning) {
-                for (SelectionKey key : selector.keys()) {
-                    try {
-                        if (key.attachment() instanceof HttpAtta) {
-                            HttpAtta atta = (HttpAtta) key.attachment();
-                            if (atta.isTimeout(timeoutMs)) {
-                                logger.debug("Closing timed out connection: {}", ((SocketChannel)key.channel()).getRemoteAddress());
-                                pendingKeys.add(new PendingKey(key, PendingKey.OP_CLOSE));
-                                selector.wakeup();
-                            }
-                        }
-                    } catch (Exception e) {
-                        logger.error("Error in timeout checker", e);
-                    }
-                }
-            }
-        }, checkIntervalMs, checkIntervalMs, TimeUnit.MILLISECONDS);
-    }
-
-    public void start() throws IOException {
-        isRunning = true;
-        selector = Selector.open();
-        serverSocketChannel = ServerSocketChannel.open();
-        serverSocketChannel.bind(new InetSocketAddress(port));
-        serverSocketChannel.configureBlocking(false);
-        serverSocketChannel.register(selector, SelectionKey.OP_ACCEPT);
-//        startTimeoutChecker(60_000, 10_000);
-
-        logger.info("HTTP server started on port {}", port);
-
-        // Start the server loop
-        while (isRunning) {
-            while (!pendingKeys.isEmpty()) {
-                PendingKey key = pendingKeys.poll();
-                if (key != null) {
-                    switch (key.getOp()) {
-                        case PendingKey.OP_READ:
-                            if (key.getKey().isValid()) {
-                                key.getKey().interestOps(SelectionKey.OP_READ);
-                            }
-                            break;
-                        case PendingKey.OP_WRITE:
-                            if (key.getKey().isValid()) {
-                                key.getKey().interestOps(SelectionKey.OP_WRITE);
-                            }
-                            break;
-                        case PendingKey.OP_CLOSE:
-                            closeKey(key.getKey());
-                            break;
-                        default:
-                            closeKey(key.getKey());
-                            break;
-                    }
-                }
-            }
-
-            selector.select();
-            Set<SelectionKey> selectedKeys = selector.selectedKeys();
-            Iterator<SelectionKey> iterator = selectedKeys.iterator();
-
-            while (iterator.hasNext()) {
-                SelectionKey key = iterator.next();
-                iterator.remove();
-
-                try {
-                    if (key.isAcceptable()) {
-                        handleAccept(key);
-                    } else if (key.isReadable()) {
-                        handleRead(key);
-                    } else if (key.isWritable()) {
-                        handleWrite(key);
-                    }
-                } catch (IOException e) {
-                    logger.error("Error handling selection key", e);
-                    key.cancel();
-                    if (key.channel() != null) {
-                        key.channel().close();
-                    }
-                }
-            }
-        }
-    }
-
-    private void closeKey(SelectionKey key) {
-        logger.debug("Closing key: {}", key);
-        key.cancel();
-    }
-
-    private void handleAccept(SelectionKey key) throws IOException {
-        ServerSocketChannel serverChannel = (ServerSocketChannel) key.channel();
-        SocketChannel clientChannel = serverChannel.accept();
-        clientChannel.configureBlocking(false);
-        logger.debug("Accepted new connection from {}", clientChannel.getRemoteAddress());
-
-        clientChannel.register(selector, SelectionKey.OP_READ, new HttpAtta());
-    }
-
-    private void handleRead(SelectionKey key) throws IOException {
-        SocketChannel clientChannel = (SocketChannel) key.channel();
-        logger.debug("Reading data from {}", clientChannel.getRemoteAddress());
-
-        handleRead(clientChannel, key);
-    }
-
-    private void handleRead(SocketChannel clientChannel, SelectionKey key) throws IOException {
-        // Get or create parser for this channel
-        HttpAtta atta = (HttpAtta) key.attachment();
-        atta.updateActivityTime();
-        // Read data from channel
-        ByteBuffer buffer = BufferPool.DEFAULT.acquire();
-        try {
-            int bytesRead = clientChannel.read(buffer);
-            if (bytesRead == -1) {
-                // Connection closed by client
-                logger.debug("Client closed connection: {}", clientChannel.getRemoteAddress());
-                key.cancel();
-                clientChannel.close();
-                return;
-            }
-
-            if (bytesRead > 0) {
-                buffer.flip();
-                HttpRequest request = atta.getParser().parse(buffer);
-                atta.setRequest(request);
-
-                if (atta.getParser().hasError()) {
-                    sendErrorResponse(key, 400, "Bad Request");
-                    key.cancel();
-                    clientChannel.close();
-                    return;
-                }
-
-                if (request != null) {
-                    // Request is complete, process it
-                    processRequest(clientChannel, key, request);
-                    atta.getParser().reset();
-
-                    // If keep-alive is not enabled, close the connection
-                    if (!request.isKeepAlive()) {
-                        key.cancel();
-                        clientChannel.close();
-                    }
-                }
-            }
-        } finally {
-            BufferPool.DEFAULT.release(buffer);
-        }
-    }
-
-    private void processRequest(SocketChannel clientChannel, SelectionKey key, HttpRequest request) throws IOException {
-        logger.debug("Processing request: {} {}", request.getMethod(), request.getUri());
-
-        // Find virtual host
-        VirtualHost virtualHost = findVirtualHost(request);
-        request.setVirtualHost(virtualHost);
-
-        // Create response
-        HttpResponse response = new HttpResponse();
-
-        HttpHandler handler = null;
-        try {
-            // Route request
-            if (router != null) {
-                handler = router.findHandle(request, response);
-            } else if (virtualHost != null && virtualHost.getDefaultHandler() != null) {
-                handler = virtualHost.getDefaultHandler();
-            } else {
-                response.setStatusCode(404);
-                response.setBody("Not Found");
-            }
-        } catch (Exception e) {
-            logger.error("Error processing request", e);
-            response.setStatusCode(500);
-            response.setBody("Internal Server Error");
-        }
-
-        HttpExchange httpExchange = new HttpExchange(request, response, handler, new ResponseCallback(key, this));
-        executorService.submit(httpExchange);
-    }
-
-    private VirtualHost findVirtualHost(HttpRequest request) {
-        String hostHeader = request.getHeader("Host").orElse("");
-        String hostName = hostHeader.split(":")[0]; // Remove port
-
-        if (!hostName.isEmpty() && virtualHosts.containsKey(hostName)) {
-            return virtualHosts.get(hostName);
-        }
-
-        return defaultVirtualHost;
-    }
-
-    private void sendErrorResponse(SelectionKey key, int statusCode, String message) throws IOException {
-        HttpResponse response = new HttpResponse();
-        response.setStatusCode(statusCode);
-        response.setBody(message);
-        response.setHeader("Connection", "close");
-        tryWrite(key, response);
-    }
-
-    public void tryWrite(SelectionKey key, HttpResponse response) {
-        // Convert response to ByteBuffer and write
-        ByteBuffer buffer = response.toByteBuffer();
-        SocketChannel clientChannel = (SocketChannel) key.channel();
-        HttpAtta atta = (HttpAtta) key.attachment();
-        try {
-            // make sure all data is written
-            while (buffer.hasRemaining()) {
-                int written = clientChannel.write(buffer);
-                logger.debug("try to write data {} byte data to {}", written, clientChannel.getRemoteAddress());
-                if (written == 0) {
-                    atta.addToWrite(ByteBuffer.wrap(buffer.array(), buffer.position(), buffer.remaining()));
-                    logger.debug("add remaining {} byte data to pending list {}", buffer.remaining(), clientChannel.getRemoteAddress());
-                    pendingKeys.add(new PendingKey(key, PendingKey.OP_WRITE));
-                    selector.wakeup();
-                    break;
-                }
-            }
-        } catch (IOException e) {
-            logger.error("Error writing response", e);
-            pendingKeys.add(new PendingKey(key, PendingKey.OP_CLOSE));
-            selector.wakeup();
-        }
-    }
-
-    private void handleWrite(SelectionKey key) throws IOException {
-        HttpAtta atta = (HttpAtta) key.attachment();
-        atta.updateActivityTime();
-        LinkedList<ByteBuffer> writeList = atta.getWriteList();
-        SocketChannel clientChannel = (SocketChannel) key.channel();
-        while (!writeList.isEmpty()) {
-            ByteBuffer buffer = writeList.getFirst();
-            int written = clientChannel.write(buffer);
-            logger.debug("write {} byte data to {}", written, clientChannel.getRemoteAddress());
-            if (written == 0) {
-                break;  // cannot write temporarily
-            }
-            if (buffer.hasRemaining()) {
-                break;
-            }
-            writeList.removeFirst();  // all data is written, remove it
-        }
-        // check if we need to close the channel
-        if (writeList.isEmpty() && atta.getRequest() != null && atta.getRequest().isKeepAlive()) {
-            key.interestOps(SelectionKey.OP_READ);
-        } else if (writeList.isEmpty()) {
-            pendingKeys.add(new PendingKey(key, PendingKey.OP_CLOSE));
-            selector.wakeup();
-        }
-    }
-
-    public void stop() {
-        isRunning = false;
-        if (timeoutChecker != null) {
-            timeoutChecker.shutdown();
-            try {
-                if (!timeoutChecker.awaitTermination(5, TimeUnit.SECONDS)) {
-                    timeoutChecker.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                timeoutChecker.shutdownNow();
-                Thread.currentThread().interrupt();
-            }
-        }
-        if (selector != null) {
-            try {
-                selector.close();
-            } catch (IOException e) {
-                logger.error("Error closing selector", e);
-            }
-        }
-        if (serverSocketChannel != null) {
-            try {
-                serverSocketChannel.close();
-            } catch (IOException e) {
-                logger.error("Error closing server socket channel", e);
-            }
-        }
-        logger.info("HTTP server stopped");
-    }
-
-    public static void main(String[] args) {
-        int port = args.length > 0 ? Integer.parseInt(args[0]) : 8080;
-        try {
-            NioHttpServer server = new NioHttpServer(port);
-            server.start();
-        } catch (IOException e) {
-            logger.error("Failed to start server", e);
-            System.exit(1);
-        }
     }
 }

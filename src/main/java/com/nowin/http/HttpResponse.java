@@ -62,6 +62,10 @@ public class HttpResponse {
         headers.put(name, value);
     }
 
+    public void setHeaders(Map<String, String> headers) {
+        this.headers.putAll(headers);
+    }
+
     public String getHeader(String name) {
         return headers.get(name);
     }

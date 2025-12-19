@@ -1,5 +1,6 @@
 package com.nowin;
 
+import com.nowin.server.ServerConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,6 +18,7 @@ import java.util.Map;
 import java.util.Objects;
 
 public class ServerBootstrap {
+
     private static final Logger logger = LoggerFactory.getLogger(ServerBootstrap.class);
     private int port = 8080;
     private final Map<String, VirtualHost> virtualHosts = new HashMap<>();
@@ -74,7 +76,8 @@ public class ServerBootstrap {
         }
 
         // Create and configure server
-        NioHttpServer server = new NioHttpServer(port);
+        ServerConfig config = new ServerConfig();
+        NioHttpServer server = new NioHttpServer(config);
         server.setVirtualHosts(virtualHosts);
         server.setDefaultVirtualHost(defaultVirtualHost);
         server.setRouter(router);
