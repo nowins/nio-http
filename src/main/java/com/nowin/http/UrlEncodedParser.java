@@ -18,34 +18,76 @@ public class UrlEncodedParser implements BodyParser {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(UrlEncodedParser.class);
 
+    private enum State {
+        PARSING,
+        COMPLETE,
+        ERROR,
+    }
+
+    private static final int MAX_CONTENT_LENGTH = 10 * 1024 * 1024;
+
     private final long contentLength;
     private final OutputStream bodyStream;
     private Map<String, List<String>> parameters;
+    private State state = State.PARSING;
+    private boolean hasError = false;
+    private long parsedBytes = 0;
 
     public UrlEncodedParser(long contentLength) {
-        if (contentLength > 10 * 1024 * 1024) { // 设置一个上限，比如 10MB
+        if (contentLength > MAX_CONTENT_LENGTH) {
             throw new IllegalArgumentException("Form data is too large for UrlEncodedParser.");
         }
         this.contentLength = contentLength;
-        this.bodyStream = new ByteArrayOutputStream((int) contentLength);
+        this.bodyStream = new ByteArrayOutputStream((int) Math.min(contentLength, Integer.MAX_VALUE));
     }
 
     @Override
-    public boolean parse(ByteBuffer buffer) throws IOException {
-        while (buffer.hasRemaining() && ((ByteArrayOutputStream) bodyStream).size() < contentLength) {
-            bodyStream.write(buffer.get());
+    public void parse(ByteBuffer buffer, Map<String, String> headers) throws IOException {
+        // 确保不读取超过 content-length 的字节
+        int remainingCapacity = (int) Math.max(0, contentLength - parsedBytes);
+        int bytesToRead = Math.min(buffer.remaining(), remainingCapacity);
+        
+        byte[] tempBuffer = new byte[bytesToRead];
+        for (int i = 0; i < bytesToRead; i++) {
+            tempBuffer[i] = buffer.get();
         }
+        bodyStream.write(tempBuffer);
+        parsedBytes += bytesToRead;
 
-        if (((ByteArrayOutputStream) bodyStream).size() >= contentLength) {
-            parseParameters();
-            return true;
+        if (parsedBytes >= contentLength) {
+            // 验证缓冲区中是否还有多余的数据（安全检查）
+            if (buffer.hasRemaining()) {
+                LOGGER.warn("Buffer contains more data than expected content-length");
+                hasError = true;
+                state = State.ERROR;
+                return;
+            }
+            try {
+                parseParameters();
+                state = State.COMPLETE;
+            } catch (Exception e) {
+                LOGGER.error("Error parsing URL-encoded parameters", e);
+                hasError = true;
+                state = State.ERROR;
+            }
         }
-        return false;
     }
 
     @Override
     public void populate(HttpRequest request) {
-        request.setBodyParameters(parameters);
+        if (state == State.COMPLETE) {
+            request.setBodyParameters(parameters);
+        }
+    }
+
+    @Override
+    public boolean isComplete() {
+        return state == State.COMPLETE;
+    }
+
+    @Override
+    public boolean hasError() {
+        return hasError || state == State.ERROR;
     }
 
     private void parseParameters() {
@@ -63,6 +105,7 @@ public class UrlEncodedParser implements BodyParser {
 
             } catch (Exception e) {
                 LOGGER.error("Error parsing URL-encoded parameters", e);
+                throw e;
             }
         }
     }

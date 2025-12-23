@@ -243,9 +243,10 @@ public class FileRequestHandler implements HttpHandler {
             // Save uploaded files
             for (HttpPart httpPart : fileParts) {
                 String fileName = httpPart.getFilename();
-                InputStream inputStream = httpPart.getInputStream();
-                Path uploadPath = filePath.resolve(fileName);
-                Files.copy(inputStream, uploadPath, StandardCopyOption.REPLACE_EXISTING);
+                try (InputStream inputStream = httpPart.getInputStream()) {
+                    Path uploadPath = filePath.resolve(fileName);
+                    Files.copy(inputStream, uploadPath, StandardCopyOption.REPLACE_EXISTING);
+                }
             }
             response.setStatusCode(200);
             response.setBody(String.format("Successfully uploaded %d files",

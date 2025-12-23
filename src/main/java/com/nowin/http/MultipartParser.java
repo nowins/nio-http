@@ -13,10 +13,11 @@ import java.util.Map;
 public class MultipartParser implements BodyParser {
 
     private enum MultipartParseState {
-        PREAMBLE,      // 寻找第一个 boundary
+        PREAMBLE,      // find first boundary
         PART_HEADERS,
         PART_DATA,
-        DONE
+        DONE,
+        ERROR
     }
 
     private static final byte CR = (byte) '\r';
@@ -27,17 +28,19 @@ public class MultipartParser implements BodyParser {
     private final byte[] fullBoundary; // --boundary
     private final byte[] endBoundary;  // --boundary--
 
-    private final long sizeThreshold; // 超过此大小则写入临时文件
+    private final long sizeThreshold; // write to temp file if size exceeds this threshold
 
-    private List<HttpPart> parts = new ArrayList<>();
+    private final List<HttpPart> parts = new ArrayList<>();
     private HttpPart currentPart;
-    private ByteArrayOutputStream currentPartHeaderBuffer = new ByteArrayOutputStream(1024);
+    private final ByteArrayOutputStream currentPartHeaderBuffer = new ByteArrayOutputStream(1024);
+    private static final int MAX_HEADER_LINE_LENGTH = 8192; // 8KB max per header line
+    private static final int MAX_HEADERS_SIZE = 65536; // 64KB max for all headers
     private OutputStream currentPartDataStream;
     private long currentPartSize = 0;
     private boolean lastBoundaryWasEnd = false;
 
     // 用于处理跨 ByteBuffer 的边界。存储上一个 buffer 未能完全匹配边界的尾部数据。
-    private ByteBuffer tailBuffer;
+    private final ByteBuffer tailBuffer;
 
     public MultipartParser(String boundaryStr, long sizeThreshold) {
         this.boundary = boundaryStr.getBytes(StandardCharsets.US_ASCII);
@@ -54,14 +57,14 @@ public class MultipartParser implements BodyParser {
     }
 
     @Override
-    public boolean parse(ByteBuffer buffer) throws IOException {
-        // 将上一次的尾部数据和本次的新数据组合成一个虚拟的 buffer 来处理
+    public void parse(ByteBuffer buffer, Map<String, String> headers) throws IOException {
+        // combine tail buffer with current buffer
         ByteBuffer effectiveBuffer = combineWithTail(buffer);
 
         while (effectiveBuffer.hasRemaining() && currentState != MultipartParseState.DONE) {
             switch (currentState) {
                 case PREAMBLE:
-                    // 忽略第一个 boundary 之前的所有内容
+                    // ignore everything before first boundary
                     if (findAndSkipBoundary(effectiveBuffer, false)) {
                         startNewPart();
                         currentState = MultipartParseState.PART_HEADERS;
@@ -76,7 +79,7 @@ public class MultipartParser implements BodyParser {
                     break;
                 case PART_DATA:
                     if (readPartData(effectiveBuffer)) {
-                        // 找到了 boundary，意味着当前 part 结束
+                        // finding the boundary means the end of the part
                         finishCurrentPart();
 
                         if (isEndBoundaryFound()) {
@@ -90,10 +93,8 @@ public class MultipartParser implements BodyParser {
             }
         }
 
-        // 保存当前 buffer 未处理的尾部，以备下次拼接
+        // save tail for next parse() call
         updateTail(effectiveBuffer);
-
-        return currentState == MultipartParseState.DONE;
     }
 
     @Override
@@ -101,11 +102,21 @@ public class MultipartParser implements BodyParser {
         request.setParts(parts);
     }
 
+    @Override
+    public boolean isComplete() {
+        return currentState == MultipartParseState.DONE;
+    }
+
+    @Override
+    public boolean hasError() {
+        return currentState == MultipartParseState.DONE;
+    }
+
     /**
-     * 在 PREAMBLE 状态下查找并跳过第一个 boundary。
-     * @param buffer 数据
-     * @param isEndBoundaryAllowed 是否允许是结束 boundary (在 PREAMBLE 中为 false)
-     * @return true 如果找到并跳过了 boundary
+     * Find and skip the first boundary in the PREAMBLE state.
+     * @param buffer data
+     * @param isEndBoundaryAllowed Whether the end boundary is allowed (false in PREAMBLE)
+     * @return true if the boundary is found and skipped
      */
     private boolean findAndSkipBoundary(ByteBuffer buffer, boolean isEndBoundaryAllowed) {
         int pos = indexOf(buffer, fullBoundary);
@@ -144,12 +155,35 @@ public class MultipartParser implements BodyParser {
      * @param buffer 数据
      * @return true 如果 Headers 读取完毕
      */
-    private boolean readPartHeaders(ByteBuffer buffer) {
+    private boolean readPartHeaders(ByteBuffer buffer) throws IOException {
         while (buffer.hasRemaining()) {
+            // Check if we've already exceeded max header size
+            if (currentPartHeaderBuffer.size() > MAX_HEADERS_SIZE) {
+                throw new IOException("Total headers size exceeds maximum limit of " + MAX_HEADERS_SIZE);
+            }
+
             byte b = buffer.get();
             currentPartHeaderBuffer.write(b);
             int size = currentPartHeaderBuffer.size();
-            // 检查是否以 \r\n\r\n 结尾
+
+            // Check if we've exceeded max line length
+            // (simple check: if we've written a lot without seeing CRLF)
+            if (size > MAX_HEADER_LINE_LENGTH) {
+                byte[] data = currentPartHeaderBuffer.toByteArray();
+                // Find last CRLF
+                boolean hasRecentCRLF = false;
+                for (int i = Math.max(0, size - 20); i < size; i++) {
+                    if (data[i] == CR || data[i] == LF) {
+                        hasRecentCRLF = true;
+                        break;
+                    }
+                }
+                if (!hasRecentCRLF) {
+                    throw new IOException("Header line exceeds maximum length of " + MAX_HEADER_LINE_LENGTH);
+                }
+            }
+
+            // check if end with CRLF
             if (size >= 4) {
                 byte[] lastFour = currentPartHeaderBuffer.toByteArray();
                 if (lastFour[size - 4] == CR && lastFour[size - 3] == LF &&
@@ -162,7 +196,7 @@ public class MultipartParser implements BodyParser {
     }
 
     /**
-     * 解析已缓存的 Part Headers
+     * Parse the cached Part Headers
      */
     private void parseCurrentPartHeaders() {
         String headersStr = currentPartHeaderBuffer.toString(StandardCharsets.UTF_8);
@@ -266,7 +300,7 @@ public class MultipartParser implements BodyParser {
     }
 
     private void preparePartDataStream() throws IOException {
-        // 默认先写入内存
+        // 默认先写入内存，文件类型在写入数据时会根据大小决定是否切换到临时文件
         currentPartDataStream = new ByteArrayOutputStream();
     }
 
@@ -278,22 +312,40 @@ public class MultipartParser implements BodyParser {
             switchToTempFile();
         }
 
-        byte[] data = new byte[bytesToWrite];
-        buffer.get(data);
-        currentPartDataStream.write(data);
+        // 直接写入ByteBuffer内容，避免创建临时byte[]数组
+        if (buffer.hasArray()) {
+            // 如果ByteBuffer有底层数组，直接使用它
+            currentPartDataStream.write(buffer.array(), buffer.position(), bytesToWrite);
+            buffer.position(buffer.position() + bytesToWrite);
+        } else {
+            // 否则使用临时数组，但减少创建频率
+            byte[] data = new byte[Math.min(bytesToWrite, 8192)];
+            while (bytesToWrite > 0) {
+                int chunkSize = Math.min(data.length, bytesToWrite);
+                buffer.get(data, 0, chunkSize);
+                currentPartDataStream.write(data, 0, chunkSize);
+                bytesToWrite -= chunkSize;
+            }
+        }
         currentPartSize += bytesToWrite;
     }
 
     private void switchToTempFile() throws IOException {
-        ByteArrayOutputStream baos = (ByteArrayOutputStream) currentPartDataStream;
         Path tempFilePath = Files.createTempFile("http-upload-", ".tmp");
         FileOutputStream fos = new FileOutputStream(tempFilePath.toFile());
 
-        baos.writeTo(fos);
+        if (currentPartDataStream instanceof ByteArrayOutputStream) {
+            // 如果当前是ByteArrayOutputStream，将已有数据写入临时文件
+            ByteArrayOutputStream baos = (ByteArrayOutputStream) currentPartDataStream;
+            baos.writeTo(fos);
+            baos.close();
+        } else if (currentPartDataStream != null) {
+            // 如果是其他类型的流，关闭它
+            currentPartDataStream.close();
+        }
 
         currentPart.setTempFile(tempFilePath.toFile());
         currentPartDataStream = fos;
-        //System.out.println("Switched to temp file: " + tempFilePath);
     }
 
     private void finishCurrentPart() throws IOException {
@@ -335,7 +387,7 @@ public class MultipartParser implements BodyParser {
             // 从 buffer 的 limit - tailSize 处开始复制
             int startPos = buffer.limit() - tailSize;
             tailBuffer.clear();
-            for(int i = 0; i < tailSize; i++) {
+            for (int i = 0; i < tailSize; i++) {
                 tailBuffer.put(buffer.get(startPos + i));
             }
             tailBuffer.flip();

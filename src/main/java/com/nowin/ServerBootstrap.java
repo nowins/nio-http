@@ -77,6 +77,7 @@ public class ServerBootstrap {
 
         // Create and configure server
         ServerConfig config = new ServerConfig();
+        config.setPort(this.port);
         NioHttpServer server = new NioHttpServer(config);
         server.setVirtualHosts(virtualHosts);
         server.setDefaultVirtualHost(defaultVirtualHost);
@@ -105,12 +106,12 @@ public class ServerBootstrap {
             ServerBootstrap bootstrap = ServerBootstrap.create();
             FileRequestHandler fileHandler = new FileRequestHandler(bootstrap.mimeTypeResolver);
             bootstrap.port(8081)
-                .addVirtualHost(new VirtualHost("localhost", Paths.get("D:\\tmp")))
-                .addRoute("/hello", (request, response) -> {
-                    response.setBody("Hello, world!");
-                })
-                .addRoute("/*", fileHandler)
-                .start();
+                    .addVirtualHost(new VirtualHost("localhost", Paths.get("D:\\tmp")))
+                    .addRoute("/hello", (request, response) -> {
+                        response.setBody("Hello, world!");
+                    })
+                    .addRoute("/*", fileHandler)
+                    .start();
         } catch (IOException e) {
             logger.error("Server failed to start", e);
         }

@@ -1,14 +1,21 @@
 package com.nowin.http;
 
 import java.io.File;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 import com.nowin.server.VirtualHost;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class HttpRequest {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(HttpRequest.class);
+
     private String method;
     private String uri;
     private String protocolVersion;
@@ -53,11 +60,9 @@ public class HttpRequest {
             String[] params = queryString.split("&");
             for (String param : params) {
                 String[] keyValue = param.split("=", 2);
-                if (keyValue.length == 2) {
-                    queryParameters.put(keyValue[0], keyValue[1]);
-                } else if (keyValue.length == 1) {
-                    queryParameters.put(keyValue[0], "");
-                }
+                String key = URLDecoder.decode(keyValue[0], StandardCharsets.UTF_8);
+                String value = keyValue.length == 2 ? URLDecoder.decode(keyValue[1], StandardCharsets.UTF_8) : "";
+                queryParameters.put(key, value);
             }
         }
     }
@@ -71,6 +76,10 @@ public class HttpRequest {
     }
 
     public void addHeader(String name, String value) {
+        headers.put(name.toLowerCase(), value);
+    }
+
+    public void setHeader(String name, String value) {
         headers.put(name.toLowerCase(), value);
     }
 
@@ -148,5 +157,26 @@ public class HttpRequest {
 
     public Optional<String> getContentType() {
         return getHeader("Content-Type");
+    }
+
+    /**
+     * cleanup request resources
+     */
+    public void cleanup() {
+        // delete temp file
+        if (tempBodyFile != null) {
+            if (!tempBodyFile.delete()) {
+                LOGGER.error("Failed to delete temp file:{}", tempBodyFile);
+            }
+            tempBodyFile = null;
+        }
+        
+        // delete HttpPart resources
+        if (parts != null) {
+            for (HttpPart part : parts) {
+                part.cleanup();
+            }
+            parts.clear();
+        }
     }
 }

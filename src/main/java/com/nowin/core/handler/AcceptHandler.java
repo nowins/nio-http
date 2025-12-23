@@ -24,24 +24,47 @@ public class AcceptHandler implements EventHandler {
     private static final Logger logger = LoggerFactory.getLogger(AcceptHandler.class);
 
     private final EventLoopGroup eventLoopGroup;
-
     private final Map<String, VirtualHost> virtualHosts;
     private final VirtualHost defaultVirtualHost;
     private final Router router;
+    private final ConnectionLimiter connectionLimiter;
 
-    public AcceptHandler(EventLoopGroup eventLoopGroup, Map<String, VirtualHost> virtualHosts, VirtualHost defaultVirtualHost, Router router) {
+    public AcceptHandler(EventLoopGroup eventLoopGroup, Map<String, VirtualHost> virtualHosts,
+            VirtualHost defaultVirtualHost, Router router) {
+        this(eventLoopGroup, virtualHosts, defaultVirtualHost, router, null);
+    }
+
+    public AcceptHandler(EventLoopGroup eventLoopGroup, Map<String, VirtualHost> virtualHosts,
+            VirtualHost defaultVirtualHost, Router router, ConnectionLimiter connectionLimiter) {
         this.eventLoopGroup = eventLoopGroup;
         this.virtualHosts = virtualHosts;
         this.defaultVirtualHost = defaultVirtualHost;
         this.router = router;
+        this.connectionLimiter = connectionLimiter;
     }
 
     @Override
     public void handle(SelectionKey key) {
         try {
+            // check connection limit
+            if (connectionLimiter != null && !connectionLimiter.incrementConnectionCount()) {
+                // reject the connection when the limit is reached
+                ServerSocketChannel serverChannel = (ServerSocketChannel) key.channel();
+                SocketChannel clientChannel = serverChannel.accept();
+                logger.warn("Connection rejected due to maximum connections limit");
+                try {
+                    clientChannel.close();
+                } catch (IOException e) {
+                    logger.error("Error closing rejected connection", e);
+                }
+                return;
+            }
+            
             ServerSocketChannel serverChannel = (ServerSocketChannel) key.channel();
             SocketChannel clientChannel = serverChannel.accept();
             clientChannel.configureBlocking(false);
+            // disable Nagle's algorithm
+            clientChannel.setOption(java.net.StandardSocketOptions.TCP_NODELAY, true);
 
             EventLoop eventLoop = eventLoopGroup.next();
             ChannelPipeline pipeline = new ChannelPipeline()
@@ -49,10 +72,14 @@ public class AcceptHandler implements EventHandler {
                     .addLast("handler", new HttpServerHandler(virtualHosts, defaultVirtualHost, router))
                     .addLast("exceptionHandler", new ExceptionHandler());
             Channel channel = new Channel(clientChannel, pipeline, eventLoop);
+            channel.setConnectionLimiter(connectionLimiter);
             pipeline.setChannel(channel);
             eventLoop.register(clientChannel, SelectionKey.OP_READ, channel);
             logger.debug("Accepted new connection from {}", clientChannel.getRemoteAddress());
         } catch (IOException e) {
+            if (connectionLimiter != null) {
+                connectionLimiter.decrementConnectionCount();
+            }
             logger.error("Error accepting new connection", e);
         }
     }

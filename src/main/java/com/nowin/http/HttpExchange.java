@@ -26,6 +26,9 @@ public class HttpExchange implements Runnable {
     @Override
     public void run() {
         try {
+            // Set response protocol version to match request
+            response.setProtocolVersion(request.getProtocolVersion());
+            
             handler.handle(request, response);
         } catch (IOException e) {
             logger.error("Error processing request", e);

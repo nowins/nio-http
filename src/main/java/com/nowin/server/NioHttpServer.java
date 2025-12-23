@@ -2,6 +2,7 @@ package com.nowin.server;
 
 import com.nowin.core.EventLoopGroup;
 import com.nowin.core.handler.AcceptHandler;
+import com.nowin.core.handler.ConnectionLimiter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -12,6 +13,7 @@ import java.nio.channels.SelectionKey;
 import java.nio.channels.spi.SelectorProvider;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class NioHttpServer {
 
@@ -26,6 +28,8 @@ public class NioHttpServer {
     private Router router = new Router();
 
     private final AtomicBoolean running = new AtomicBoolean(false);
+    private final AtomicInteger connectionCount = new AtomicInteger(0);
+    private int maxConnections = 10000; // 默认最大连接数10000
 
     private ServerConfig config;
 
@@ -59,7 +63,8 @@ public class NioHttpServer {
             bossGroup = new EventLoopGroup(config.getBossThreads());
         }
 
-        int workerThreads = config.getWorkerThreads() <= 0 ? Runtime.getRuntime().availableProcessors() * 2 : config.getWorkerThreads();
+        int workerThreads = config.getWorkerThreads() <= 0 ? Runtime.getRuntime().availableProcessors() * 2
+                : config.getWorkerThreads();
         workerGroup = new EventLoopGroup(workerThreads);
     }
 
@@ -72,7 +77,20 @@ public class NioHttpServer {
         InetSocketAddress address = new InetSocketAddress(config.getHost(), config.getPort());
         serverSocketChannel.bind(address);
 
-        bossGroup.next().register(serverSocketChannel, SelectionKey.OP_ACCEPT, new AcceptHandler(workerGroup, virtualHosts, defaultVirtualHost, router));
+        ConnectionLimiter connectionLimiter = new ConnectionLimiter() {
+            @Override
+            public boolean incrementConnectionCount() {
+                return NioHttpServer.this.incrementConnectionCount();
+            }
+            
+            @Override
+            public void decrementConnectionCount() {
+                NioHttpServer.this.decrementConnectionCount();
+            }
+        };
+
+        bossGroup.next().register(serverSocketChannel, SelectionKey.OP_ACCEPT,
+                new AcceptHandler(workerGroup, virtualHosts, defaultVirtualHost, router, connectionLimiter));
     }
 
     private void startAcceptor() {
@@ -86,7 +104,23 @@ public class NioHttpServer {
     }
 
     public void shutdown() {
-
+        if (running.compareAndSet(true, false)) {
+            logger.info("Stopping NioHttpServer...");
+            try {
+                if (serverSocketChannel != null) {
+                    serverSocketChannel.close();
+                }
+            } catch (IOException e) {
+                logger.error("Error closing server socket", e);
+            }
+            if (bossGroup != null) {
+                bossGroup.shutdown();
+            }
+            if (workerGroup != null) {
+                workerGroup.shutdown();
+            }
+            logger.info("NioHttpServer stopped.");
+        }
     }
 
     public void setVirtualHosts(Map<String, VirtualHost> virtualHosts) {
@@ -99,5 +133,33 @@ public class NioHttpServer {
 
     public void setRouter(Router router) {
         this.router = router;
+    }
+    
+    public int getMaxConnections() {
+        return maxConnections;
+    }
+    
+    public void setMaxConnections(int maxConnections) {
+        this.maxConnections = maxConnections;
+    }
+    
+    public int getConnectionCount() {
+        return connectionCount.get();
+    }
+    
+    public boolean incrementConnectionCount() {
+        int currentCount;
+        do {
+            currentCount = connectionCount.get();
+            if (currentCount >= maxConnections) {
+                logger.warn("Connection count exceeds maximum limit of {}", maxConnections);
+                return false;
+            }
+        } while (!connectionCount.compareAndSet(currentCount, currentCount + 1));
+        return true;
+    }
+    
+    public void decrementConnectionCount() {
+        connectionCount.decrementAndGet();
     }
 }

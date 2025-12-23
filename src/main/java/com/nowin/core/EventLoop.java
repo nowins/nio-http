@@ -19,7 +19,6 @@ public class EventLoop {
 
     private final Selector selector;
     private final Thread thread;
-//    private final Executor executor;
     private final ScheduledThreadPoolExecutor scheduledExecutor;
     private final int id;
     private static int nextId = 0;
@@ -27,7 +26,7 @@ public class EventLoop {
     private final Queue<Runnable> taskQueue = new ConcurrentLinkedQueue<>();
 
     public EventLoop(Executor executor) {
-//        this.executor = executor == null ? new ScheduledThreadPoolExecutor(1) : executor;
+        // executor;
         this.scheduledExecutor = new ScheduledThreadPoolExecutor(1);
         try {
             this.selector = Selector.open();
@@ -41,7 +40,7 @@ public class EventLoop {
 
     public void start() {
         if (running.compareAndSet(false, true)) {
-//            executor.execute(this::run);
+            // executor.execute(this::run);
             thread.start();
         }
     }
@@ -54,28 +53,64 @@ public class EventLoop {
     }
 
     public void run() {
-        while (running.get() && !Thread.currentThread().isInterrupted()) {
-            try {
-                processTasks();
-                if (selector.select(1000) == 0) {
-                    continue;
+        try {
+            while (running.get() && !Thread.currentThread().isInterrupted()) {
+                try {
+                    // handle tasks firstly
+                    boolean hasTasks = processTasks();
+
+                    if (hasTasks) {
+                        selector.selectNow();  // non-blocking
+                    } else {
+                        selector.select(100);  // blocking
+                    }
+                    
+                    processSelectedKeys();
+                } catch (Exception e) {
+                    logger.error("Error in event loop", e);
                 }
-                processSelectedKeys();
-            } catch (Exception e) {
-                logger.error("Error in event loop", e);
+            }
+        } finally {
+            try {
+                selector.close();
+                logger.info("EventLoop {} selector closed", id);
+            } catch (IOException e) {
+                logger.error("Error closing selector", e);
             }
         }
     }
-
-    private void processTasks() {
+    
+    /**
+     * handle tasks in the task queue
+     * @return true: there are tasks to process, otherwise false
+     */
+    private boolean processTasks() {
+        boolean hasTasks = false;
         Runnable task;
-        while ((task = taskQueue.poll()) != null) {
+        int processedTasks = 0;
+        int maxTasksPerIteration = 100;
+        long maxProcessingTimePerIteration = 50;
+        long startTime = System.currentTimeMillis();
+        
+        // only process maxTasksPerIteration task at a time to avoid long blocking
+        while (processedTasks < maxTasksPerIteration && (task = taskQueue.poll()) != null) {
+            // check if processing time exceeds the limit
+            if (System.currentTimeMillis() - startTime > maxProcessingTimePerIteration) {
+                // return to the task queue
+                taskQueue.offer(task);
+                break;
+            }
+            
+            hasTasks = true;
+            processedTasks++;
             try {
                 task.run();
             } catch (Exception e) {
                 logger.error("Error in task", e);
             }
         }
+        
+        return hasTasks;
     }
 
     private void processSelectedKeys() {
@@ -118,7 +153,7 @@ public class EventLoop {
     }
 
     private void handleRead(SelectionKey key) throws IOException {
-        key.interestOps(key.interestOps() & ~SelectionKey.OP_READ);  // remove read interest
+        key.interestOps(key.interestOps() & ~SelectionKey.OP_READ); // remove read interest
         Channel channel = (Channel) key.attachment();
         channel.process(key);
     }
@@ -134,13 +169,13 @@ public class EventLoop {
             logger.debug("write {} byte data to {}", written, clientChannel.getRemoteAddress());
             if (written == 0) {
                 key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
-                break;  // cannot write temporarily
+                break; // cannot write temporarily
             }
             if (buffer.hasRemaining()) {
                 key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
                 break;
             }
-            writeQueue.poll();  // all data is written, remove it
+            channel.removeFromWriteQueue(); // all data is written, remove it and update queue size
         }
         if (writeQueue.isEmpty()) {
             handleWriteCompletion(channel);

@@ -31,7 +31,7 @@ public class HttpServerCodec implements ChannelHandler {
             int bytesRead = clientChannel.read(buffer);
             if (bytesRead == -1) {
                 // Connection closed by client
-                logger.debug("Client closed connection: {}", clientChannel.getRemoteAddress());
+                logger.debug("Connection closed by client: {}", clientChannel.getRemoteAddress());
                 closeConnection(key);
                 return;
             }
@@ -41,22 +41,27 @@ public class HttpServerCodec implements ChannelHandler {
                 request = parser.parse(buffer);
 
                 if (parser.hasError()) {
+                    parser.reset();
                     ctx.fireExceptionCaught(new IOException("Invalid request"));
+                    closeConnection(key);
                     return;
                 }
             }
         } catch (IOException e) {
-            logger.error("Error reading from client: {}", e.getMessage());
+            logger.error("Error reading data from {}", clientChannel, e);
             closeConnection(key);
         } finally {
-            parser.reset();
             BufferPool.DEFAULT.release(buffer);
         }
 
         if (request != null) {
             // Request is complete, process it
+            parser.reset();
             ctx.setRequest(request);
             ctx.fireChannelRead(request);
+        } else {
+            // Request incomplete, need more data
+            key.interestOps(key.interestOps() | SelectionKey.OP_READ);
         }
     }
 
@@ -74,6 +79,7 @@ public class HttpServerCodec implements ChannelHandler {
         SocketChannel clientChannel = (SocketChannel) key.channel();
         try {
             logger.debug("Closing connection: {}", clientChannel.getRemoteAddress());
+            key.cancel();
             clientChannel.close();
         } catch (IOException e) {
             logger.error("Error closing connection: {}", e.getMessage());

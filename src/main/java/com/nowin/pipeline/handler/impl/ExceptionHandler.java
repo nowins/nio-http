@@ -8,8 +8,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.util.HashMap;
-import java.util.Map;
 
 public class ExceptionHandler implements ChannelHandler {
 
@@ -27,13 +25,44 @@ public class ExceptionHandler implements ChannelHandler {
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        logger.error("Exception caught: {}", cause.getMessage());
+        // Build detailed log message with context information
+        StringBuilder logMessage = new StringBuilder("Exception caught in pipeline");
+        
+        // Try to get Channel from context to access request information
+        if (ctx != null && ctx.channel() != null) {
+            com.nowin.pipeline.Channel channel = ctx.channel();
+            logMessage.append(", channel: ").append(channel);
+            
+            // Get HttpRequest from channel if available
+            if (channel.getRequest() != null) {
+                com.nowin.http.HttpRequest request = channel.getRequest();
+                logMessage.append(", method: ").append(request.getMethod());
+                logMessage.append(", uri: ").append(request.getUri());
+                logMessage.append(", protocol: ").append(request.getProtocolVersion());
+                
+                // Add client IP if available
+                if (channel.javaChannel() != null && channel.javaChannel().socket() != null) {
+                    logMessage.append(", client: ").append(channel.javaChannel().socket().getRemoteSocketAddress());
+                }
+            }
+        }
+        
+        logger.error(logMessage.toString(), cause);
+        
+        // handle specific exceptions
         if (cause instanceof InvalidRequestException) {
             sendErrorResponse(ctx, 400, "Bad Request", cause.getMessage());
         } else if (isConnectionReset(cause)) {
-            logger.debug("Connection reset by peer");
+            logger.debug("Connection reset by peer, channel: {}", ctx != null && ctx.channel() != null ? ctx.channel() : "unknown");
+        } else if (cause instanceof IllegalArgumentException || cause instanceof ClassCastException) {
+            sendErrorResponse(ctx, 400, "Bad Request", "Invalid request parameters");
+        } else if (cause instanceof NullPointerException) {
+            sendErrorResponse(ctx, 500, "Internal Server Error", "Null pointer exception");
+        } else if (cause instanceof ArrayIndexOutOfBoundsException) {
+            sendErrorResponse(ctx, 500, "Internal Server Error", "Array index out of bounds");
         } else {
-            sendErrorResponse(ctx, 500, "Internal Server Error", cause.getMessage());
+            // all other exceptions
+            sendErrorResponse(ctx, 500, "Internal Server Error", "An unexpected error occurred");
         }
     }
 
@@ -48,14 +77,16 @@ public class ExceptionHandler implements ChannelHandler {
     private void sendErrorResponse(ChannelHandlerContext ctx, int statusCode, String statusText, String body) {
         HttpResponse response = new HttpResponse();
         response.setStatusCode(statusCode);
-        response.setBody(body);
-        response.setBody("<html><body><h1>" + statusCode + " " + statusText + "</h1><p>" + body + "</p></body></html>");
+        
+        // set response body
+        String htmlBody = "<html><body><h1>" + statusCode + " " + statusText + "</h1><p>" + body + "</p></body></html>";
+        response.setBody(htmlBody);
 
-        Map<String, String> headers = new HashMap<>();
-        headers.put("Content-Type", "text/html; charset=utf-8");
-        headers.put("Content-Length", String.valueOf(response.getBody().length));
-        headers.put("Connection", "close");
-        response.setHeaders(headers);
+        // set response headers
+        response.setHeader("Content-Type", "text/html; charset=utf-8");
+        response.setHeader("Content-Length", String.valueOf(htmlBody.length()));
+        response.setHeader("Connection", "close");
+        
         ctx.fireChannelWrite(response.toByteBuffer());
     }
 }

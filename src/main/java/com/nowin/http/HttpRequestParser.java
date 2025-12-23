@@ -20,15 +20,13 @@ public class HttpRequestParser {
     }
 
     private final ByteArrayOutputStream lineBuffer = new ByteArrayOutputStream(256);
+    private static final int MAX_HEADER_LINE_LENGTH = 8192; // 8KB max per header line
+    private static final int MAX_HEADERS_SIZE = 65536; // 64KB max for all headers
     private ParseState state = ParseState.START_LINE;
     private HttpRequest request = new HttpRequest();
     private BodyParser bodyParser;
-    private int contentLength = 0;
     private String multipartBoundary = null;
-    private String currentPartName = null;
-    private String currentFileName = null;
-    private boolean inPartHeaders = false;
-    private StringBuilder partHeaderBuffer = new StringBuilder();
+    private final StringBuilder partHeaderBuffer = new StringBuilder();
 
     public HttpRequest parse(ByteBuffer byteBuffer) {
         while (byteBuffer.hasRemaining() && !ParseState.COMPLETE.equals(state)) {
@@ -49,9 +47,13 @@ public class HttpRequestParser {
                         }
                         break;
                     case BODY:
-                        if (bodyParser.parse(byteBuffer)) {
+                        bodyParser.parse(byteBuffer, request.getHeaders());
+                        if (bodyParser.isComplete()) {
                             bodyParser.populate(request);
                             state = ParseState.COMPLETE;
+                        }
+                        if (bodyParser.hasError()) {
+                            state = ParseState.ERROR;
                         }
                         break;
                     case ERROR:
@@ -96,37 +98,90 @@ public class HttpRequestParser {
             String headerLine = lineBuffer.toString();
             lineBuffer.reset();
             if (headerLine.isEmpty()) {
-                return true;  // read end of headers
+                return true; // read end of headers
             }
             int colonIndex = headerLine.indexOf(':');
             if (colonIndex == -1) {
-                logger.warn("Invalid header line: {}", headerLine);
-                continue; // Ignore invalid headers per RFC
+                logger.error("Invalid header line, missing colon: {}", headerLine);
+                state = ParseState.ERROR;
+                return false;
             }
             String name = headerLine.substring(0, colonIndex).trim();
             String value = headerLine.substring(colonIndex + 1).trim();
+
+            if (!isValidHeaderName(name)) {
+                logger.error("Invalid header name: {}", name);
+                state = ParseState.ERROR;
+                return false;
+            }
+            
+            // verify header value
+            if (!isValidHeaderValue(value)) {
+                logger.error("Invalid header value for {}: {}", name, value);
+                state = ParseState.ERROR;
+                return false;
+            }
+            
             request.addHeader(name, value);
         }
         return false;
+    }
+    
+    /**
+     * verify header name
+     * token = 1*( %x21 / %x23-27 / %x2A-2B / %x2D-2E / %x30-39 / %x41-5A / %x5E-7A / %x7C / %x7E )
+     */
+    private boolean isValidHeaderName(String name) {
+        if (name.isEmpty()) {
+            return false;
+        }
+        for (int i = 0; i < name.length(); i++) {
+            char c = name.charAt(i);
+            if (!((c >= 'a' && c <= 'z') || 
+                  (c >= 'A' && c <= 'Z') || 
+                  (c >= '0' && c <= '9') || 
+                  c == '!' || c == '#' || c == '$' || c == '%' || c == '&' || 
+                  c == '\'' || c == '*' || c == '+' || c == '-' || c == '.' || 
+                  c == '^' || c == '_' || c == '`' || c == '|' || c == '~')) {
+                return false;
+            }
+        }
+        return true;
+    }
+    
+    /**
+     * verify header value (no control characters)
+     */
+    private boolean isValidHeaderValue(String value) {
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            // can't contain control characters, except for tab
+            if (c < 32 && c != 9) {
+                return false;
+            }
+            // can't contain DEL character
+            if (c == 127) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private boolean setupBodyParser() {
         String contentType = request.getHeaders().get("Content-Type".toLowerCase());
         String contentLengthStr = request.getHeaders().get("Content-Length".toLowerCase());
-
-        // 如果没有 Content-Length (或为0)，则认为没有 Body
-        if (contentLengthStr == null || "0".equals(contentLengthStr)) {
-            return false;
-        }
-        long contentLength = Long.parseLong(contentLengthStr);
+        String transferEncoding = request.getHeaders().get("Transfer-Encoding".toLowerCase());
+        
+        // Check if request uses chunked transfer encoding
+        boolean isChunked = transferEncoding != null && transferEncoding.toLowerCase().contains("chunked");
+        
+        // max size of body, exceed this size, save to temp file
+        long sizeThreshold = 1024 * 1024;
 
         if (contentType == null) {
-            // 如果没有 Content-Type，按原始二进制处理
+            // default to octet-stream
             contentType = "application/octet-stream";
         }
-
-        // 阈值：1MB，大于此值存入临时文件
-        long sizeThreshold = 1024 * 1024;
 
         String lowerContentType = contentType.toLowerCase();
 
@@ -138,18 +193,35 @@ public class HttpRequestParser {
             this.bodyParser = new MultipartParser(boundary, sizeThreshold);
             return true;
         } else if (lowerContentType.startsWith("application/x-www-form-urlencoded")) {
-            this.bodyParser = new UrlEncodedParser(contentLength);
+            if (isChunked) {
+                // For chunked requests, we don't have a content length, so we'll use a different parser
+                this.bodyParser = new ChunkedBodyParser(sizeThreshold);
+            } else {
+                long contentLength = contentLengthStr != null ? Long.parseLong(contentLengthStr) : 0;
+                this.bodyParser = new UrlEncodedParser(contentLength);
+            }
             return true;
         } else if (lowerContentType.startsWith("application/json") ||
                 lowerContentType.startsWith("text/") ||
                 lowerContentType.startsWith("application/xml") ||
                 lowerContentType.startsWith("application/octet-stream")) {
-            this.bodyParser = new RawBodyParser(contentLength, sizeThreshold);
+            if (isChunked) {
+                this.bodyParser = new ChunkedBodyParser(sizeThreshold);
+            } else {
+                if (contentLengthStr == null || "0".equals(contentLengthStr)) {
+                    return false;
+                }
+                long contentLength = Long.parseLong(contentLengthStr);
+                this.bodyParser = new RawBodyParser(contentLength, sizeThreshold);
+            }
+            return true;
+        } else if (isChunked) {
+            // For any other content type with chunked encoding
+            this.bodyParser = new ChunkedBodyParser(sizeThreshold);
             return true;
         }
 
-        // 不支持的 Content-Type，可以决定是忽略 Body 还是抛出异常
-        // 这里我们选择忽略
+        // unknown content type, ignore
         return false;
     }
 
@@ -176,12 +248,36 @@ public class HttpRequestParser {
             return false;
         }
 
-        int lineEnd = findCRLF(buffer);
-        if (lineEnd == -1) {
-            return false; // 数据不足
+        // Check if we've already exceeded max header size
+        if (lineBuffer.size() > MAX_HEADERS_SIZE) {
+            logger.error("Total headers size exceeds maximum limit of {}", MAX_HEADERS_SIZE);
+            state = ParseState.ERROR;
+            return false;
         }
 
-        // 提取请求行
+        int lineEnd = findCRLF(buffer);
+        if (lineEnd == -1) {
+            // No CRLF found, append remaining data to lineBuffer
+            int remainingBytes = buffer.remaining();
+            // Check if adding this data would exceed max line length
+            if (lineBuffer.size() + remainingBytes > MAX_HEADER_LINE_LENGTH) {
+                logger.error("Header line exceeds maximum length of {}", MAX_HEADER_LINE_LENGTH);
+                state = ParseState.ERROR;
+                return false;
+            }
+            
+            byte[] remaining = new byte[remainingBytes];
+            buffer.get(remaining);
+            try {
+                lineBuffer.write(remaining);
+            } catch (IOException e) {
+                logger.error("Error writing to line buffer", e);
+                state = ParseState.ERROR;
+            }
+            return false; // Not enough data yet
+        }
+
+        // CRLF found
         buffer.mark();
         byte[] lineBytes = new byte[lineEnd];
         buffer.get(lineBytes);
@@ -193,7 +289,14 @@ public class HttpRequestParser {
             buffer.reset();
             return false;
         }
-        buffer.position(buffer.position() + 2); // 跳过 \r\n
+        buffer.position(buffer.position() + 2); // Skip \r\n
+        // Check if line exceeds maximum allowed length
+        if (lineBuffer.size() > MAX_HEADER_LINE_LENGTH) {
+            logger.error("Header line exceeds maximum length of {}", MAX_HEADER_LINE_LENGTH);
+            state = ParseState.ERROR;
+            return false;
+        }
+
         return true;
     }
 
@@ -247,11 +350,7 @@ public class HttpRequestParser {
         lineBuffer.reset();
         state = ParseState.START_LINE;
         request = new HttpRequest();
-        contentLength = 0;
         multipartBoundary = null;
-        currentPartName = null;
-        currentFileName = null;
-        inPartHeaders = false;
         partHeaderBuffer.setLength(0);
     }
 }

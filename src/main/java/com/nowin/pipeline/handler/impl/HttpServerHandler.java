@@ -34,6 +34,9 @@ public class HttpServerHandler implements ChannelHandler {
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         HttpRequest request = (HttpRequest) msg;
         HttpResponse response = new HttpResponse();
+        // Set response protocol version to match request
+        response.setProtocolVersion(request.getProtocolVersion());
+        
         HttpHandler handler = null;
         try {
             VirtualHost virtualHost = findVirtualHost(request);
@@ -76,6 +79,12 @@ public class HttpServerHandler implements ChannelHandler {
         ChannelFuture writeFuture = ctx.write(response.toByteBuffer());
         writeFuture.addListener(future -> {
             logger.debug("Write completed");
+            try {
+                // clean up request resources
+                request.cleanup();
+            } catch (Exception e) {
+                logger.error("Error cleaning up request resources", e);
+            }
             if (!future.isSuccess()) {
                 logger.error("Error writing response", future.cause());
                 ctx.close();
