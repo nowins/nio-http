@@ -37,21 +37,28 @@ public class HttpServerHandler implements ChannelHandler {
         // Set response protocol version to match request
         response.setProtocolVersion(request.getProtocolVersion());
         
+        logger.debug("Processing request: {} {}, protocol: {}", request.getMethod(), request.getUri(), request.getProtocolVersion());
+        
         HttpHandler handler = null;
         try {
             VirtualHost virtualHost = findVirtualHost(request);
             request.setVirtualHost(virtualHost);
+            logger.debug("Using virtual host: {}", virtualHost != null ? virtualHost.getHostName() : "default");
+            
             // Route request
             if (router != null) {
                 handler = router.findHandle(request, response);
+                logger.debug("Router found handler: {}", handler != null ? handler.getClass().getName() : "null");
             } else if (virtualHost != null && virtualHost.getDefaultHandler() != null) {
                 handler = virtualHost.getDefaultHandler();
+                logger.debug("Using default handler: {}", handler.getClass().getName());
             } else {
+                logger.debug("No handler found, returning 404");
                 response.setStatusCode(404);
                 response.setBody("Not Found");
             }
         } catch (Exception e) {
-            logger.error("Error processing request", e);
+            logger.error("Error processing request: {} {}", request.getMethod(), request.getUri(), e);
             response.setStatusCode(500);
             response.setBody("Internal Server Error");
         }
@@ -61,10 +68,11 @@ public class HttpServerHandler implements ChannelHandler {
         }
 
         try {
+            logger.debug("Calling handler: {} for request: {} {}", handler.getClass().getName(), request.getMethod(), request.getUri());
             handler.handle(request, response);
-            logger.debug("http file process completed:{}", request);
+            logger.info("Request completed: {} {}, status: {}", request.getMethod(), request.getUri(), response.getStatusCode());
         } catch (IOException e) {
-            logger.error("Error processing request", e);
+            logger.error("Error processing request: {} {}", request.getMethod(), request.getUri(), e);
             response.setStatusCode(500);
             response.setBody("Internal Server Error");
         }

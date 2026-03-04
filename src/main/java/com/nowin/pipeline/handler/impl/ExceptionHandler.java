@@ -75,6 +75,11 @@ public class ExceptionHandler implements ChannelHandler {
     }
 
     private void sendErrorResponse(ChannelHandlerContext ctx, int statusCode, String statusText, String body) {
+        if (ctx == null) {
+            logger.error("Cannot send error response: ChannelHandlerContext is null");
+            return;
+        }
+        
         HttpResponse response = new HttpResponse();
         response.setStatusCode(statusCode);
         
