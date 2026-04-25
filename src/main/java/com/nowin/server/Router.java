@@ -7,8 +7,7 @@ import com.nowin.handler.HttpHandler;
 import com.nowin.http.HttpRequest;
 import com.nowin.http.HttpResponse;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -20,14 +19,22 @@ public class Router {
     };
 
     private static class Route {
+        final String pathPattern;
         final Pattern pattern;
         final HttpHandler handler;
         final List<String> pathParamNames;
+        final Set<String> methods; // null or empty means all methods
 
         Route(String pathPattern, HttpHandler handler) {
+            this(pathPattern, handler, null);
+        }
+
+        Route(String pathPattern, HttpHandler handler, Set<String> methods) {
+            this.pathPattern = pathPattern;
             this.pathParamNames = new ArrayList<>();
             this.pattern = compilePattern(pathPattern, this.pathParamNames);
             this.handler = handler;
+            this.methods = methods != null && !methods.isEmpty() ? new HashSet<>(methods) : null;
         }
 
         private Pattern compilePattern(String pathPattern, List<String> paramNames) {
@@ -63,8 +70,14 @@ public class Router {
             return Pattern.compile(regex.toString());
         }
 
-        boolean matches(String path) {
-            return pattern.matcher(path).matches();
+        boolean matches(String path, String method) {
+            if (!pattern.matcher(path).matches()) {
+                return false;
+            }
+            if (methods == null || methods.isEmpty()) {
+                return true;
+            }
+            return methods.contains(method.toUpperCase());
         }
 
         Matcher getMatcher(String path) {
@@ -76,10 +89,26 @@ public class Router {
     private HttpHandler defaultHandler = NOT_FOUND_HANDLER;
 
     public Router addRoute(String pathPattern, HttpHandler handler) {
+        return addRoute(pathPattern, handler, null);
+    }
+
+    public Router addRoute(String pathPattern, HttpHandler handler, Set<String> methods) {
         if (pathPattern == null || pathPattern.isEmpty() || !pathPattern.startsWith("/")) {
             throw new IllegalArgumentException("Path pattern must start with '/'");
         }
-        routes.add(new Route(pathPattern, handler));
+        routes.add(new Route(pathPattern, handler, methods));
+        return this;
+    }
+
+    public Router addRouteFirst(String pathPattern, HttpHandler handler) {
+        return addRouteFirst(pathPattern, handler, null);
+    }
+
+    public Router addRouteFirst(String pathPattern, HttpHandler handler, Set<String> methods) {
+        if (pathPattern == null || pathPattern.isEmpty() || !pathPattern.startsWith("/")) {
+            throw new IllegalArgumentException("Path pattern must start with '/'");
+        }
+        routes.addFirst(new Route(pathPattern, handler, methods));
         return this;
     }
 
@@ -90,12 +119,15 @@ public class Router {
 
     public HttpHandler findHandle(HttpRequest request, HttpResponse response) throws Exception {
         String path = request.getUri().split("\\?")[0]; // Remove query parameters
-        HttpHandler matchedHandler = findMatchingHandler(path, request);
+        HttpHandler matchedHandler = findMatchingHandler(path, request.getMethod(), request);
         return matchedHandler;
     }
 
-    private HttpHandler findMatchingHandler(String path, HttpRequest request) {
+    private HttpHandler findMatchingHandler(String path, String method, HttpRequest request) {
         for (Route route : routes) {
+            if (!route.matches(path, method)) {
+                continue;
+            }
             Matcher matcher = route.getMatcher(path);
             if (matcher.matches()) {
                 // Extract path parameters
@@ -112,5 +144,29 @@ public class Router {
 
     public int getRoutesCount() {
         return routes.size();
+    }
+
+    /**
+     * Check if any route matches the given path (ignoring HTTP method).
+     */
+    public HttpHandler findHandleByPath(String path) {
+        for (Route route : routes) {
+            if (route.pattern.matcher(path).matches()) {
+                return route.handler;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Check if an exact path pattern is already registered.
+     */
+    public boolean hasExactRoute(String pathPattern) {
+        for (Route route : routes) {
+            if (route.pathPattern.equals(pathPattern)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

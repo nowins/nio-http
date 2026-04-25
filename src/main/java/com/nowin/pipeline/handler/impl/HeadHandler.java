@@ -2,6 +2,7 @@ package com.nowin.pipeline.handler.impl;
 
 import com.nowin.pipeline.ChannelHandlerContext;
 import com.nowin.pipeline.handler.ChannelHandler;
+import com.nowin.util.BufferPool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,20 +17,32 @@ public class HeadHandler implements ChannelHandler {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        ctx.fireChannelRead(msg);
+        ByteBuffer buffer = ctx.channel().getReadBuffer();
+        if (buffer != null) {
+            ctx.fireChannelRead(buffer);
+        }
     }
 
     @Override
     public void channelWrite(ChannelHandlerContext ctx, Object msg) {
         ByteBuffer buffer = (ByteBuffer) msg;
-        SocketChannel clientChannel = ctx.underlyingChannel();
+        com.nowin.pipeline.Channel channel = ctx.channel();
+        if (channel == null) {
+            // Test environment without a real channel; skip actual I/O
+            BufferPool.DEFAULT.release(buffer);
+            return;
+        }
+        SocketChannel clientChannel = channel.javaChannel();
         try {
+            int totalWritten = 0;
             // make sure all data is written
             while (buffer.hasRemaining()) {
                 int written = clientChannel.write(buffer);
+                totalWritten += written;
                 logger.debug("try to write data {} byte data to {}", written, clientChannel.getRemoteAddress());
                 if (written == 0) {
-                    ctx.channel().addToWrite(ByteBuffer.wrap(buffer.array(), buffer.position(), buffer.remaining()));
+                    ByteBuffer remaining = buffer.slice();
+                    channel.addToWrite(remaining);
                     logger.debug("add remaining {} byte data to pending list {}", buffer.remaining(), clientChannel.getRemoteAddress());
 
                     SelectionKey key = ctx.getSelectionKey();
@@ -39,14 +52,20 @@ public class HeadHandler implements ChannelHandler {
                 }
             }
 
+            if (totalWritten > 0 && channel.getMetricsCollector() != null) {
+                channel.getMetricsCollector().recordBytesWritten(totalWritten);
+            }
+
             logger.debug("write data to {} completed", clientChannel.getRemoteAddress());
             SelectionKey key = ctx.getSelectionKey();
             key.interestOps(key.interestOps() & ~SelectionKey.OP_WRITE);
-            ctx.channel().onWriteCompletion();
+            channel.onWriteCompletion();
         } catch (Exception e) {
             logger.error("Error writing response", e);
-            ctx.channel().getPipeline().completeLastWriteFuture(e);
+            channel.getPipeline().completeLastWriteFuture(e);
             ctx.fireExceptionCaught(e);
+        } finally {
+            BufferPool.DEFAULT.release(buffer);
         }
     }
 

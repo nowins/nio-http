@@ -4,7 +4,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.text.SimpleDateFormat;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.zip.GZIPOutputStream;
 import java.io.ByteArrayOutputStream;
@@ -13,7 +15,8 @@ import java.io.IOException;
 public class HttpResponse {
     private static final Logger logger = LoggerFactory.getLogger(HttpResponse.class);
     private static final String CRLF = "\r\n";
-    private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz");
+    private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US)
+            .withZone(ZoneId.of("GMT"));
     private static final String SERVER_HEADER = "NIO-Http/1.0";
     private static final int DEFAULT_CHUNK_SIZE = 4096;
 
@@ -30,9 +33,8 @@ public class HttpResponse {
     private int chunkSize = DEFAULT_CHUNK_SIZE;
 
     public HttpResponse() {
-        DATE_FORMAT.setTimeZone(TimeZone.getTimeZone("GMT"));
         setHeader("Server", SERVER_HEADER);
-        setHeader("Date", DATE_FORMAT.format(new Date()));
+        setHeader("Date", DATE_FORMAT.format(Instant.now()));
     }
 
     public int getStatusCode() {
@@ -88,10 +90,10 @@ public class HttpResponse {
     }
 
     public void setProtocolVersion(String protocolVersion) {
-        this.protocolVersion = protocolVersion;
+        this.protocolVersion = protocolVersion != null ? protocolVersion : "HTTP/1.1";
         
         // HTTP/1.0 specific handling
-        if (protocolVersion.equalsIgnoreCase("HTTP/1.0")) {
+        if (this.protocolVersion.equalsIgnoreCase("HTTP/1.0")) {
             // Force disable chunked encoding for HTTP/1.0
             setChunkedEncoding(false);
             
@@ -107,10 +109,30 @@ public class HttpResponse {
     }
 
     public void setBody(String body) {
-        this.body = body.getBytes(StandardCharsets.UTF_8);
+        setBody(body, getCharsetFromContentType());
+    }
+
+    public void setBody(String body, java.nio.charset.Charset charset) {
+        this.body = body.getBytes(charset);
         if (!chunkedEncoding) {
             setHeader("Content-Length", String.valueOf(this.body.length));
         }
+    }
+
+    private java.nio.charset.Charset getCharsetFromContentType() {
+        String contentType = getHeader("Content-Type");
+        if (contentType != null) {
+            int charsetIndex = contentType.toLowerCase().indexOf("charset=");
+            if (charsetIndex != -1) {
+                String charsetName = contentType.substring(charsetIndex + 8).trim();
+                try {
+                    return java.nio.charset.Charset.forName(charsetName);
+                } catch (IllegalArgumentException e) {
+                    logger.warn("Invalid charset: {}, using UTF-8 instead", charsetName);
+                }
+            }
+        }
+        return StandardCharsets.UTF_8;
     }
 
     public void setBody(byte[] body) {
@@ -147,9 +169,28 @@ public class HttpResponse {
     }
 
     public void enableCompressionIfSupported(HttpRequest request) {
-        if (body != null && body.length > 0 && request.getHeader("Accept-Encoding").isPresent()) {
-            String acceptEncoding = request.getHeader("Accept-Encoding").get();
-            boolean compressed = false;
+        if (chunkedEncoding && chunks != null && !chunks.isEmpty()) {
+            // Cannot compress already chunked explicit chunks
+            return;
+        }
+        if (body == null || body.length == 0 || body.length < 512) {
+            return; // Skip empty or very small bodies
+        }
+        String contentType = getHeader("Content-Type");
+        if (contentType != null) {
+            String baseType = contentType.split(";")[0].trim().toLowerCase();
+            // Skip already compressed or non-compressible formats
+            if (baseType.startsWith("image/") || baseType.startsWith("video/") || baseType.startsWith("audio/")
+                    || baseType.equals("application/gzip") || baseType.equals("application/zip")
+                    || baseType.equals("application/pdf") || baseType.equals("application/x-7z-compressed")) {
+                return;
+            }
+        }
+        if (!request.getHeader("Accept-Encoding").isPresent()) {
+            return;
+        }
+        String acceptEncoding = request.getHeader("Accept-Encoding").get();
+        boolean compressed = false;
 
             // Try gzip first if supported
             if (!compressed && acceptEncoding.contains("gzip") && !gzipCompression) {
@@ -191,7 +232,6 @@ public class HttpResponse {
             // Add Vary: Accept-Encoding for caching purposes
             setHeader("Vary", "Accept-Encoding");
         }
-    }
 
     /**
      * Adds a single chunk to the response.
@@ -200,10 +240,21 @@ public class HttpResponse {
      * @param chunk the data chunk to add
      */
     public void addChunk(String chunk) {
+        addChunk(chunk, getCharsetFromContentType());
+    }
+
+    /**
+     * Adds a single chunk to the response with specified charset.
+     * Only applicable when chunked encoding is enabled.
+     * 
+     * @param chunk the data chunk to add
+     * @param charset the charset to use for encoding
+     */
+    public void addChunk(String chunk, java.nio.charset.Charset charset) {
         if (!chunkedEncoding) {
             setChunkedEncoding(true);
         }
-        this.chunks.add(chunk.getBytes(StandardCharsets.UTF_8));
+        this.chunks.add(chunk.getBytes(charset));
     }
 
     /**

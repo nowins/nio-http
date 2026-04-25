@@ -12,7 +12,7 @@ import java.util.regex.Pattern;
 
 public class HttpRequestParser {
     private static final Logger logger = LoggerFactory.getLogger(HttpRequestParser.class);
-    private static final Pattern REQUEST_LINE_PATTERN = Pattern.compile("^([A-Z]+) (.*) (HTTP/\\d\\.\\d)$");
+    private static final Pattern REQUEST_LINE_PATTERN = Pattern.compile("^([A-Za-z0-9!#$%&'*+\\-.^_`|~]+) (.*) (HTTP/\\d\\.\\d)$");
     private static final byte[] CRLF_BYTES = "\r\n".getBytes(StandardCharsets.US_ASCII);
 
     private enum ParseState {
@@ -175,8 +175,7 @@ public class HttpRequestParser {
         // Check if request uses chunked transfer encoding
         boolean isChunked = transferEncoding != null && transferEncoding.toLowerCase().contains("chunked");
         
-        // max size of body, exceed this size, save to temp file
-        long sizeThreshold = 1024 * 1024;
+        long sizeThreshold = BodyParserFactory.getDefaultSizeThreshold();
 
         if (contentType == null) {
             // default to octet-stream
@@ -186,19 +185,19 @@ public class HttpRequestParser {
         String lowerContentType = contentType.toLowerCase();
 
         if (lowerContentType.startsWith("multipart/form-data")) {
-            String boundary = extractBoundary(contentType);
+            String boundary = BodyParserFactory.extractBoundary(contentType);
             if (boundary == null) {
                 throw new IllegalArgumentException("Missing boundary for multipart/form-data");
             }
-            this.bodyParser = new MultipartParser(boundary, sizeThreshold);
+            multipartBoundary = boundary;
+            this.bodyParser = BodyParserFactory.createMultipartParser(boundary, sizeThreshold);
             return true;
         } else if (lowerContentType.startsWith("application/x-www-form-urlencoded")) {
             if (isChunked) {
-                // For chunked requests, we don't have a content length, so we'll use a different parser
-                this.bodyParser = new ChunkedBodyParser(sizeThreshold);
+                this.bodyParser = BodyParserFactory.createChunkedBodyParser(sizeThreshold);
             } else {
                 long contentLength = contentLengthStr != null ? Long.parseLong(contentLengthStr) : 0;
-                this.bodyParser = new UrlEncodedParser(contentLength);
+                this.bodyParser = BodyParserFactory.createUrlEncodedParser(contentLength);
             }
             return true;
         } else if (lowerContentType.startsWith("application/json") ||
@@ -206,18 +205,17 @@ public class HttpRequestParser {
                 lowerContentType.startsWith("application/xml") ||
                 lowerContentType.startsWith("application/octet-stream")) {
             if (isChunked) {
-                this.bodyParser = new ChunkedBodyParser(sizeThreshold);
+                this.bodyParser = BodyParserFactory.createChunkedBodyParser(sizeThreshold);
             } else {
                 if (contentLengthStr == null || "0".equals(contentLengthStr)) {
                     return false;
                 }
                 long contentLength = Long.parseLong(contentLengthStr);
-                this.bodyParser = new RawBodyParser(contentLength, sizeThreshold);
+                this.bodyParser = BodyParserFactory.createRawBodyParser(contentLength, sizeThreshold);
             }
             return true;
         } else if (isChunked) {
-            // For any other content type with chunked encoding
-            this.bodyParser = new ChunkedBodyParser(sizeThreshold);
+            this.bodyParser = BodyParserFactory.createChunkedBodyParser(sizeThreshold);
             return true;
         }
 

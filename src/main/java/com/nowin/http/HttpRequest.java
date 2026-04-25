@@ -76,7 +76,13 @@ public class HttpRequest {
     }
 
     public void addHeader(String name, String value) {
-        headers.put(name.toLowerCase(), value);
+        String lowerName = name.toLowerCase();
+        String existingValue = headers.get(lowerName);
+        if (existingValue != null) {
+            headers.put(lowerName, existingValue + ", " + value);
+        } else {
+            headers.put(lowerName, value);
+        }
     }
 
     public void setHeader(String name, String value) {

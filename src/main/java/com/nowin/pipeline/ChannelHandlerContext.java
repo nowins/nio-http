@@ -24,6 +24,10 @@ public class ChannelHandlerContext {
         return name;
     }
 
+    public ChannelHandler getHandler() {
+        return handler;
+    }
+
     public SocketChannel underlyingChannel() {
         return pipeline.channel().javaChannel();
     }

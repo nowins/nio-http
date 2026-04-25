@@ -2,6 +2,7 @@ package com.nowin.core;
 
 import com.nowin.core.handler.AcceptHandler;
 import com.nowin.pipeline.Channel;
+import com.nowin.util.BufferPool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -23,7 +24,7 @@ public class EventLoop {
     private final int id;
     private static int nextId = 0;
     private final AtomicBoolean running = new AtomicBoolean(false);
-    private final Queue<Runnable> taskQueue = new ConcurrentLinkedQueue<>();
+    private final BlockingQueue<PriorityTask> taskQueue = new PriorityBlockingQueue<>();
 
     public EventLoop(Executor executor) {
         // executor;
@@ -49,6 +50,25 @@ public class EventLoop {
         if (running.compareAndSet(true, false)) {
             selector.wakeup();
             scheduledExecutor.shutdown();
+            try {
+                if (!scheduledExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    scheduledExecutor.shutdownNow();
+                    if (!scheduledExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                        logger.error("ScheduledExecutor did not terminate");
+                    }
+                }
+            } catch (InterruptedException e) {
+                scheduledExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+            try {
+                if (thread.isAlive()) {
+                    thread.join(10000);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                logger.error("Interrupted while waiting for EventLoop thread to terminate", e);
+            }
         }
     }
 
@@ -86,17 +106,14 @@ public class EventLoop {
      */
     private boolean processTasks() {
         boolean hasTasks = false;
-        Runnable task;
+        PriorityTask task;
         int processedTasks = 0;
         int maxTasksPerIteration = 100;
         long maxProcessingTimePerIteration = 50;
         long startTime = System.currentTimeMillis();
         
-        // only process maxTasksPerIteration task at a time to avoid long blocking
         while (processedTasks < maxTasksPerIteration && (task = taskQueue.poll()) != null) {
-            // check if processing time exceeds the limit
             if (System.currentTimeMillis() - startTime > maxProcessingTimePerIteration) {
-                // return to the task queue
                 taskQueue.offer(task);
                 break;
             }
@@ -125,20 +142,16 @@ public class EventLoop {
             return;
         }
         try {
-            switch (key.readyOps()) {
-                case SelectionKey.OP_ACCEPT:
-                    handleAccept(key);
-                    break;
-                case SelectionKey.OP_READ:
-                    handleRead(key);
-                    break;
-                case SelectionKey.OP_WRITE:
-                    handleWrite(key);
-                    break;
-                default:
-                    logger.warn("Unknown selection key operation: {}", key.readyOps());
+            if (key.isAcceptable()) {
+                handleAccept(key);
             }
-        } catch (IOException e) {
+            if (key.isReadable()) {
+                handleRead(key);
+            }
+            if (key.isWritable()) {
+                handleWrite(key);
+            }
+        } catch (Exception e) {
             logger.error("Error in event loop", e);
             if (key.attachment() instanceof Channel channel) {
                 channel.getPipeline().completeLastWriteFuture(e);
@@ -155,7 +168,28 @@ public class EventLoop {
     private void handleRead(SelectionKey key) throws IOException {
         key.interestOps(key.interestOps() & ~SelectionKey.OP_READ); // remove read interest
         Channel channel = (Channel) key.attachment();
-        channel.process(key);
+        ByteBuffer buffer = BufferPool.DEFAULT.acquire();
+        try {
+            SocketChannel clientChannel = (SocketChannel) key.channel();
+            int bytesRead = clientChannel.read(buffer);
+            if (bytesRead == -1) {
+                channel.close();
+                return;
+            }
+            if (bytesRead > 0) {
+                buffer.flip();
+                channel.setReadBuffer(buffer);
+                if (channel.getMetricsCollector() != null) {
+                    channel.getMetricsCollector().recordBytesRead(bytesRead);
+                }
+                channel.process(key);
+            } else {
+                BufferPool.DEFAULT.release(buffer);
+            }
+        } catch (IOException e) {
+            BufferPool.DEFAULT.release(buffer);
+            throw e;
+        }
     }
 
     private void handleWrite(SelectionKey key) throws IOException {
@@ -217,9 +251,29 @@ public class EventLoop {
         if (inEventLoop()) {
             task.run();
         } else {
-            taskQueue.offer(task);
+            taskQueue.offer(new PriorityTask(task));
             selector.wakeup();
         }
+    }
+
+    public void execute(Runnable task, PriorityTask.Priority priority) {
+        if (task == null) {
+            return;
+        }
+        if (inEventLoop()) {
+            task.run();
+        } else {
+            taskQueue.offer(new PriorityTask(task, priority));
+            selector.wakeup();
+        }
+    }
+
+    public void executeHighPriority(Runnable task) {
+        execute(task, PriorityTask.Priority.HIGH);
+    }
+
+    public void executeLowPriority(Runnable task) {
+        execute(task, PriorityTask.Priority.LOW);
     }
 
     public ScheduledFuture<?> schedule(Runnable command, long delay, TimeUnit unit) {

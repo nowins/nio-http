@@ -109,7 +109,7 @@ public class MultipartParser implements BodyParser {
 
     @Override
     public boolean hasError() {
-        return currentState == MultipartParseState.DONE;
+        return currentState == MultipartParseState.ERROR;
     }
 
     /**

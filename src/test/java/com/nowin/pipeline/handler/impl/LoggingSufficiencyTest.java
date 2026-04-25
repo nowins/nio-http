@@ -132,7 +132,7 @@ public class LoggingSufficiencyTest {
         // Verify logs contain expected processing details
         boolean foundProcessingLog = false;
         for (ILoggingEvent log : logs) {
-            if (log.getMessage().contains("Error processing request")) {
+            if (log.getMessage().contains("No handler found") || log.getMessage().contains("Request completed")) {
                 foundProcessingLog = true;
                 break;
             }
@@ -160,7 +160,10 @@ public class LoggingSufficiencyTest {
             HttpRequest request = new HttpRequest();
             request.setMethod("GET");
             request.setUri("/test");
-            serverHandler.channelRead(null, request);
+            ChannelPipeline pipeline = new ChannelPipeline();
+            ChannelHandler testHandler = new TestHandler();
+            ChannelHandlerContext ctx = new ChannelHandlerContext("test", pipeline, testHandler);
+            serverHandler.channelRead(ctx, request);
         });
         
         // Note: HttpServerCodec and HeadHandler require more setup to test logging

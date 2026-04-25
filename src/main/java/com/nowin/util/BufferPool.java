@@ -106,7 +106,22 @@ public class BufferPool {
         LinkedBlockingQueue<ByteBuffer> pool = bufferPools.get(capacity);
         if (pool != null) {
             buffer.clear();
-            pool.offer(buffer);
+            if (!pool.offer(buffer)) {
+                // Pool is full; for direct buffers, try explicit cleanup to relieve native memory pressure.
+                // In Java 21 direct buffers are cleaned by GC via Cleaner, but proactive cleanup helps.
+                if (buffer.isDirect()) {
+                    try {
+                        java.lang.reflect.Method cleanerMethod = buffer.getClass().getMethod("cleaner");
+                        cleanerMethod.setAccessible(true);
+                        Object cleaner = cleanerMethod.invoke(buffer);
+                        if (cleaner != null) {
+                            cleaner.getClass().getMethod("clean").invoke(cleaner);
+                        }
+                    } catch (Exception e) {
+                        // Ignore: fall back to GC Cleaner
+                    }
+                }
+            }
         }
         // if the pool is not found, do nothing
     }

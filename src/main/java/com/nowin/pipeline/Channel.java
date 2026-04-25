@@ -3,6 +3,8 @@ package com.nowin.pipeline;
 import com.nowin.core.EventLoop;
 import com.nowin.core.handler.ConnectionLimiter;
 import com.nowin.http.HttpRequest;
+import com.nowin.server.LoadMonitor;
+import com.nowin.server.MetricsCollector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -20,16 +22,20 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class Channel {
 
     private static final Logger logger = LoggerFactory.getLogger(Channel.class);
-    private static final int MAX_WRITE_QUEUE_SIZE = 100; // max write queue size for per channel
+    private static final int DEFAULT_MAX_WRITE_QUEUE_SIZE = 100;
 
     private final SocketChannel socketChannel;
     private final EventLoop eventLoop;
     private final ChannelPipeline pipeline;
     private SelectionKey selectionKey;
     private HttpRequest request;
+    private ByteBuffer readBuffer;
     private final Queue<ByteBuffer> writeQueue = new ConcurrentLinkedQueue<>();
     private final AtomicInteger writeQueueSize = new AtomicInteger(0);
     private ConnectionLimiter connectionLimiter;
+    private LoadMonitor loadMonitor;
+    private MetricsCollector metricsCollector;
+    private int maxWriteQueueSize = DEFAULT_MAX_WRITE_QUEUE_SIZE;
 
     public Channel(SocketChannel socketChannel, ChannelPipeline pipeline, EventLoop eventLoop) {
         this.socketChannel = socketChannel;
@@ -40,9 +46,31 @@ public class Channel {
     public void setConnectionLimiter(ConnectionLimiter connectionLimiter) {
         this.connectionLimiter = connectionLimiter;
     }
+
+    public void setLoadMonitor(LoadMonitor loadMonitor) {
+        this.loadMonitor = loadMonitor;
+    }
+
+    public LoadMonitor getLoadMonitor() {
+        return loadMonitor;
+    }
+
+    public void setMetricsCollector(MetricsCollector metricsCollector) {
+        this.metricsCollector = metricsCollector;
+    }
+
+    public MetricsCollector getMetricsCollector() {
+        return metricsCollector;
+    }
+    
+    public void setWriteQueueCapacity(int capacity) {
+        if (capacity > 0) {
+            this.maxWriteQueueSize = capacity;
+        }
+    }
     
     public boolean isWriteQueueFull() {
-        return writeQueueSize.get() >= MAX_WRITE_QUEUE_SIZE;
+        return writeQueueSize.get() >= maxWriteQueueSize;
     }
 
     @SuppressWarnings("resource")
@@ -110,6 +138,14 @@ public class Channel {
         this.request = request;
     }
 
+    public ByteBuffer getReadBuffer() {
+        return readBuffer;
+    }
+
+    public void setReadBuffer(ByteBuffer readBuffer) {
+        this.readBuffer = readBuffer;
+    }
+
     public void onWriteCompletion() {
         if (writeQueue.isEmpty()) {
             logger.debug("write completed");
@@ -146,6 +182,9 @@ public class Channel {
             // decrement connection count
             if (connectionLimiter != null) {
                 connectionLimiter.decrementConnectionCount();
+            }
+            if (loadMonitor != null) {
+                loadMonitor.connectionClosed();
             }
         }
     }

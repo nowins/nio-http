@@ -4,9 +4,21 @@ import com.nowin.pipeline.ChannelHandlerContext;
 
 public interface ChannelHandler {
 
-    void channelRead(ChannelHandlerContext ctx, Object msg);
+    default void channelRead(ChannelHandlerContext ctx, Object msg) {
+        ctx.fireChannelRead(msg);
+    }
 
-    void channelWrite(ChannelHandlerContext ctx, Object msg);
+    default void channelWrite(ChannelHandlerContext ctx, Object msg) {
+        ctx.fireChannelWrite(msg);
+    }
 
-    void exceptionCaught(ChannelHandlerContext ctx, Throwable cause);
+    default void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        ctx.fireExceptionCaught(cause);
+    }
+
+    default void handlerAdded(ChannelHandlerContext ctx) {
+    }
+
+    default void handlerRemoved(ChannelHandlerContext ctx) {
+    }
 }

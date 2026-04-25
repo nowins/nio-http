@@ -29,26 +29,14 @@ public class HttpServerCodec implements ChannelHandler {
         } catch (IOException e) {
             logger.error("Error getting remote address", e);
         }
-        
+
         logger.debug("ChannelRead called for client: {}", remoteAddr);
-        
-        // Read data from channel
-        ByteBuffer buffer = BufferPool.DEFAULT.acquire();
+
+        ByteBuffer buffer = (ByteBuffer) msg;
         HttpRequest request = null;
         try {
-            logger.debug("Reading data from {}", remoteAddr);
-            int bytesRead = clientChannel.read(buffer);
-            
-            if (bytesRead == -1) {
-                // Connection closed by client
-                logger.debug("Connection closed by client: {}", remoteAddr);
-                closeConnection(key);
-                return;
-            }
-
-            if (bytesRead > 0) {
-                logger.debug("Read {} bytes from {}", bytesRead, remoteAddr);
-                buffer.flip();
+            if (buffer.hasRemaining()) {
+                logger.debug("Processing {} bytes from {}", buffer.remaining(), remoteAddr);
                 request = parser.parse(buffer);
 
                 if (parser.hasError()) {
@@ -59,13 +47,14 @@ public class HttpServerCodec implements ChannelHandler {
                     return;
                 }
             } else {
-                logger.debug("Read 0 bytes from {}", remoteAddr);
+                logger.debug("Empty buffer from {}", remoteAddr);
             }
-        } catch (IOException e) {
-            logger.error("Error reading data from {}", remoteAddr, e);
+        } catch (Exception e) {
+            logger.error("Error parsing request from {}", remoteAddr, e);
             closeConnection(key);
         } finally {
             BufferPool.DEFAULT.release(buffer);
+            ctx.channel().setReadBuffer(null);
         }
 
         if (request != null) {

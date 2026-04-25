@@ -36,8 +36,18 @@ public class ChannelPipeline {
         return this;
     }
 
+    public ChannelPipeline addFirst(String name, ChannelHandler handler) {
+        ChannelHandlerContext ctx = new ChannelHandlerContext(name, this, handler);
+        ChannelHandlerContext next = head.getNext();
+        head.setNext(ctx);
+        ctx.setPrev(head);
+        ctx.setNext(next);
+        next.setPrev(ctx);
+        return this;
+    }
+
     public void fireChannelRead(Object msg) {
-        head.fireChannelRead(msg);
+        head.getHandler().channelRead(head, msg);
     }
 
     public void fireChannelWrite(Object msg) {

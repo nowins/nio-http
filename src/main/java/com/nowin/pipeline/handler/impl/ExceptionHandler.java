@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 
 public class ExceptionHandler implements ChannelHandler {
 
@@ -85,11 +86,12 @@ public class ExceptionHandler implements ChannelHandler {
         
         // set response body
         String htmlBody = "<html><body><h1>" + statusCode + " " + statusText + "</h1><p>" + body + "</p></body></html>";
-        response.setBody(htmlBody);
+        byte[] bodyBytes = htmlBody.getBytes(StandardCharsets.UTF_8);
+        response.setBody(bodyBytes);
 
         // set response headers
         response.setHeader("Content-Type", "text/html; charset=utf-8");
-        response.setHeader("Content-Length", String.valueOf(htmlBody.length()));
+        response.setHeader("Content-Length", String.valueOf(bodyBytes.length));
         response.setHeader("Connection", "close");
         
         ctx.fireChannelWrite(response.toByteBuffer());

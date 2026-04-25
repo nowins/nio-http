@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 import com.nowin.http.HttpRequest;
 import com.nowin.http.HttpResponse;
 import com.nowin.http.MimeTypeResolver;
+import com.nowin.server.ResourceCache;
 import com.nowin.server.VirtualHost;
 
 import java.io.IOException;
@@ -18,17 +19,32 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
-import java.text.SimpleDateFormat;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 
 public class FileRequestHandler implements HttpHandler {
     private static final Logger logger = LoggerFactory.getLogger(FileRequestHandler.class);
-    private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+    private static final long MAX_CACHEABLE_SIZE = 1024 * 1024; // 1MB
+    // RFC 7231 HTTP date format for headers (e.g., Last-Modified, If-*)
+    private static final DateTimeFormatter HTTP_DATE_FORMAT = DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss zzz")
+            .withZone(ZoneId.of("GMT"));
+    // Display format for directory listings
+    private static final DateTimeFormatter DISPLAY_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+            .withZone(ZoneId.systemDefault());
     private final MimeTypeResolver mimeTypeResolver;
+    private final ResourceCache<String, byte[]> resourceCache;
 
     public FileRequestHandler(MimeTypeResolver mimeTypeResolver) {
+        this(mimeTypeResolver, null);
+    }
+
+    public FileRequestHandler(MimeTypeResolver mimeTypeResolver, ResourceCache<String, byte[]> resourceCache) {
         this.mimeTypeResolver = mimeTypeResolver;
+        this.resourceCache = resourceCache;
     }
 
     @Override
@@ -71,13 +87,19 @@ public class FileRequestHandler implements HttpHandler {
     }
 
     private Path resolveFilePath(VirtualHost virtualHost, String requestUri) {
-        // Normalize path to prevent directory traversal attacks
-        String normalizedPath = requestUri.replace("../", "");
+        String normalizedPath = requestUri;
         if (normalizedPath.startsWith("/")) {
             normalizedPath = normalizedPath.substring(1);
         }
 
-        return virtualHost.getRootDirectory().resolve(normalizedPath).normalize();
+        Path root = virtualHost.getRootDirectory().normalize().toAbsolutePath();
+        Path resolved = root.resolve(normalizedPath).normalize();
+        if (!resolved.startsWith(root)) {
+            logger.warn("Path traversal attempt blocked: {}", requestUri);
+            throw new SecurityException("Path traversal attempt: " + requestUri);
+        }
+
+        return resolved;
     }
 
     private void handleFileRequest(Path filePath, HttpRequest request, HttpResponse response) throws IOException {
@@ -129,31 +151,46 @@ public class FileRequestHandler implements HttpHandler {
         long lastModified = attrs.lastModifiedTime().toMillis();
         fileSize = attrs.size();
 
-        // Set last modified header
-        response.setHeader("Last-Modified", DATE_FORMAT.format(new Date(lastModified)));
+        // Set last modified header (RFC 7231 format)
+        response.setHeader("Last-Modified", HTTP_DATE_FORMAT.format(Instant.ofEpochMilli(lastModified)));
 
-        // Generate ETag (using inode, size and last modified time for uniqueness)
-        String eTag = String.format("\"%d-%d-%d\"",
-                filePath.hashCode(), fileSize, lastModified);
+        // Generate ETag (stable across JVM restarts)
+        String eTag = String.format("\"%s-%s\"",
+                Long.toHexString(fileSize), Long.toHexString(lastModified));
         response.setHeader("ETag", eTag);
 
-        // Handle conditional requests
+        // Handle If-Range before conditional checks (affects whether range is honored)
+        boolean ifRangeMatches = handleIfRange(request, eTag, lastModified);
+
+        // Handle conditional requests (If-Match, If-None-Match, If-Unmodified-Since, If-Modified-Since)
         if (handleConditionalRequest(request, response, lastModified, eTag)) {
             response.setBody(new byte[0]);
             return;
         }
 
-        // Handle range requests if supported
-        if (handleRangeRequest(filePath, request, response)) {
+        // Handle range requests if If-Range matches (or absent)
+        if (ifRangeMatches && handleRangeRequest(filePath, request, response, fileSize)) {
             return;
         }
 
         // Read file content and set as response body
-        byte[] content = Files.readAllBytes(filePath);
+        byte[] content = readFileWithCache(filePath, lastModified);
         response.setBody(content);
+    }
 
-        // Enable compression if supported
-        response.enableCompressionIfSupported(request);
+    private byte[] readFileWithCache(Path filePath, long lastModified) throws IOException {
+        String cacheKey = filePath.toAbsolutePath().toString() + "|" + lastModified;
+        if (resourceCache != null) {
+            byte[] cached = resourceCache.get(cacheKey);
+            if (cached != null) {
+                return cached;
+            }
+        }
+        byte[] content = Files.readAllBytes(filePath);
+        if (resourceCache != null && content.length <= MAX_CACHEABLE_SIZE) {
+            resourceCache.put(cacheKey, content);
+        }
+        return content;
     }
 
     private void handlePutRequest(Path filePath, HttpRequest request, HttpResponse response) throws IOException {
@@ -258,9 +295,39 @@ public class FileRequestHandler implements HttpHandler {
 
     }
 
+    private boolean handleIfRange(HttpRequest request, String eTag, long lastModified) {
+        Optional<String> ifRange = request.getHeader("If-Range");
+        if (!ifRange.isPresent()) {
+            return true;
+        }
+        String value = ifRange.get().trim();
+        // Try ETag match first
+        if (value.equals(eTag)) {
+            return true;
+        }
+        // Try HTTP date match
+        try {
+            ZonedDateTime clientDate = ZonedDateTime.parse(value, HTTP_DATE_FORMAT);
+            return lastModified <= clientDate.toInstant().toEpochMilli();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private boolean handleConditionalRequest(HttpRequest request, HttpResponse response, long lastModified, String eTag)
             throws IOException {
-        // Handle If-None-Match
+        // If-Match: return 412 if ETag does not match
+        Optional<String> ifMatch = request.getHeader("If-Match");
+        if (ifMatch.isPresent()) {
+            String clientETag = ifMatch.get();
+            if (!clientETag.equals("*") && !clientETag.equals(eTag)) {
+                response.setStatusCode(412);
+                response.setStatusMessage("Precondition Failed");
+                return true;
+            }
+        }
+
+        // If-None-Match
         Optional<String> ifNoneMatch = request.getHeader("If-None-Match");
         if (ifNoneMatch.isPresent()) {
             String clientETag = ifNoneMatch.get();
@@ -271,12 +338,27 @@ public class FileRequestHandler implements HttpHandler {
             }
         }
 
-        // Handle If-Modified-Since
+        // If-Unmodified-Since: return 412 if resource has been modified since the given date
+        Optional<String> ifUnmodifiedSince = request.getHeader("If-Unmodified-Since");
+        if (ifUnmodifiedSince.isPresent()) {
+            try {
+                ZonedDateTime clientDate = ZonedDateTime.parse(ifUnmodifiedSince.get(), HTTP_DATE_FORMAT);
+                if (lastModified > clientDate.toInstant().toEpochMilli()) {
+                    response.setStatusCode(412);
+                    response.setStatusMessage("Precondition Failed");
+                    return true;
+                }
+            } catch (Exception e) {
+                logger.warn("Invalid If-Unmodified-Since date format: {}", ifUnmodifiedSince.get());
+            }
+        }
+
+        // If-Modified-Since
         Optional<String> ifModifiedSince = request.getHeader("If-Modified-Since");
         if (ifModifiedSince.isPresent() && !ifNoneMatch.isPresent()) {
             try {
-                Date clientLastModified = DATE_FORMAT.parse(ifModifiedSince.get());
-                if (lastModified <= clientLastModified.getTime()) {
+                ZonedDateTime clientDate = ZonedDateTime.parse(ifModifiedSince.get(), HTTP_DATE_FORMAT);
+                if (lastModified <= clientDate.toInstant().toEpochMilli()) {
                     response.setStatusCode(304);
                     response.setStatusMessage("Not Modified");
                     return true;
@@ -289,7 +371,9 @@ public class FileRequestHandler implements HttpHandler {
         return false;
     }
 
-    private boolean handleRangeRequest(Path filePath, HttpRequest request, HttpResponse response) throws IOException {
+    private static final long MAX_RANGE_SIZE = 8 * 1024 * 1024; // 8MB
+
+    private boolean handleRangeRequest(Path filePath, HttpRequest request, HttpResponse response, long fileSize) throws IOException {
         // Add Accept-Ranges header to indicate support for range requests
         response.setHeader("Accept-Ranges", "bytes");
 
@@ -307,15 +391,21 @@ public class FileRequestHandler implements HttpHandler {
             return true;
         }
 
-        // Parse range header (supports only single range for now)
-        String[] rangeParts = range.substring(6).split("-");
+        // Parse range header
+        String rangesSpec = range.substring(6);
+
+        // Check for multi-range request
+        if (rangesSpec.contains(",")) {
+            return handleMultiRangeRequest(filePath, request, response, rangesSpec, fileSize);
+        }
+
+        String[] rangeParts = rangesSpec.split("-");
         if (rangeParts.length < 1 || rangeParts.length > 2) {
             response.setStatusCode(416);
             response.setBody("Invalid Range Format");
             return true;
         }
 
-        long fileSize = Files.size(filePath);
         long start = 0;
         long end = fileSize - 1;
 
@@ -358,12 +448,18 @@ public class FileRequestHandler implements HttpHandler {
 
         // Calculate content length for this range
         long contentLength = end - start + 1;
+        if (contentLength > MAX_RANGE_SIZE) {
+            response.setStatusCode(416);
+            response.setBody("Requested range exceeds maximum allowed size");
+            return true;
+        }
         response.setHeader("Content-Length", String.valueOf(contentLength));
         response.setHeader("Content-Range", String.format("bytes %d-%d/%d", start, end, fileSize));
 
         // Read the requested range
         try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(filePath)) {
-            ByteBuffer buffer = ByteBuffer.allocate((int) contentLength);
+            byte[] rangeContent = new byte[(int) contentLength];
+            ByteBuffer buffer = ByteBuffer.wrap(rangeContent);
             channel.position(start);
             int bytesRead = channel.read(buffer);
             if (bytesRead != contentLength) {
@@ -372,12 +468,105 @@ public class FileRequestHandler implements HttpHandler {
                 response.setBody("Internal Server Error");
                 return true;
             }
-            buffer.flip();
-            byte[] rangeContent = new byte[buffer.remaining()];
-            buffer.get(rangeContent);
             response.setBody(rangeContent);
         }
 
+        return true;
+    }
+
+    private boolean handleMultiRangeRequest(Path filePath, HttpRequest request, HttpResponse response,
+                                            String rangesSpec, long fileSize) throws IOException {
+        String boundary = "NIO_HTTP_" + Long.toHexString(System.currentTimeMillis());
+        String mimeType = mimeTypeResolver.getMimeType(filePath);
+        List<byte[]> parts = new ArrayList<>();
+        long totalLength = 0;
+
+        String[] ranges = rangesSpec.split(",");
+        for (String rangeStr : ranges) {
+            rangeStr = rangeStr.trim();
+            String[] rangeParts = rangeStr.split("-");
+            if (rangeParts.length < 1 || rangeParts.length > 2) {
+                response.setStatusCode(416);
+                response.setBody("Invalid Range Format");
+                return true;
+            }
+
+            long start = 0;
+            long end = fileSize - 1;
+            try {
+                if (!rangeParts[0].isEmpty()) {
+                    start = Long.parseLong(rangeParts[0]);
+                    if (start < 0 || start >= fileSize) {
+                        response.setStatusCode(416);
+                        response.setBody("Requested Range Not Satisfiable");
+                        return true;
+                    }
+                    if (rangeParts.length == 2 && !rangeParts[1].isEmpty()) {
+                        end = Long.parseLong(rangeParts[1]);
+                        if (end < start || end >= fileSize) {
+                            response.setStatusCode(416);
+                            response.setBody("Requested Range Not Satisfiable");
+                            return true;
+                        }
+                    }
+                } else {
+                    if (rangeParts.length == 2 && !rangeParts[1].isEmpty()) {
+                        long suffixLength = Long.parseLong(rangeParts[1]);
+                        start = Math.max(0, fileSize - suffixLength);
+                    } else {
+                        response.setStatusCode(416);
+                        response.setBody("Invalid Range Format");
+                        return true;
+                    }
+                }
+            } catch (NumberFormatException e) {
+                response.setStatusCode(416);
+                response.setBody("Invalid Range Format");
+                return true;
+            }
+
+            long contentLength = end - start + 1;
+            if (contentLength > MAX_RANGE_SIZE) {
+                response.setStatusCode(416);
+                response.setBody("Requested range exceeds maximum allowed size");
+                return true;
+            }
+
+            byte[] partHeader = String.format("\r\n--%s\r\nContent-Type: %s\r\nContent-Range: bytes %d-%d/%d\r\n\r\n",
+                    boundary, mimeType, start, end, fileSize).getBytes(StandardCharsets.UTF_8);
+
+            try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(filePath)) {
+                byte[] rangeContent = new byte[(int) contentLength];
+                ByteBuffer buffer = ByteBuffer.wrap(rangeContent);
+                channel.position(start);
+                int read = channel.read(buffer);
+                if (read != contentLength) {
+                    logger.warn("Failed to read complete range: requested {}, read {}", contentLength, read);
+                    response.setStatusCode(500);
+                    response.setBody("Internal Server Error");
+                    return true;
+                }
+                parts.add(partHeader);
+                parts.add(rangeContent);
+                totalLength += partHeader.length + rangeContent.length;
+            }
+        }
+
+        byte[] endMarker = ("\r\n--" + boundary + "--\r\n").getBytes(StandardCharsets.UTF_8);
+        totalLength += endMarker.length;
+
+        byte[] body = new byte[(int) totalLength];
+        int pos = 0;
+        for (byte[] part : parts) {
+            System.arraycopy(part, 0, body, pos, part.length);
+            pos += part.length;
+        }
+        System.arraycopy(endMarker, 0, body, pos, endMarker.length);
+
+        response.setStatusCode(206);
+        response.setHeader("Content-Type", "multipart/byteranges; boundary=" + boundary);
+        response.setHeader("Content-Length", String.valueOf(totalLength));
+        response.setBody(body);
         return true;
     }
 
@@ -455,7 +644,7 @@ public class FileRequestHandler implements HttpHandler {
 
             BasicFileAttributes attrs = Files.readAttributes(entry, BasicFileAttributes.class);
             String size = Files.isDirectory(entry) ? "" : String.valueOf(attrs.size());
-            String lastModified = DATE_FORMAT.format(new Date(attrs.lastModifiedTime().toMillis()));
+            String lastModified = DISPLAY_DATE_FORMAT.format(attrs.lastModifiedTime().toInstant());
 
             html.append("<tr>")
                     .append("<td><a href='").append(entryUri).append("'>").append(entryName).append("</a></td>")

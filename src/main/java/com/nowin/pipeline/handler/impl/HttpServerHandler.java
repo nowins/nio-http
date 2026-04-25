@@ -7,6 +7,8 @@ import com.nowin.http.HttpResponse;
 import com.nowin.pipeline.ChannelFuture;
 import com.nowin.pipeline.ChannelHandlerContext;
 import com.nowin.pipeline.handler.ChannelHandler;
+import com.nowin.server.LoadMonitor;
+import com.nowin.server.MetricsCollector;
 import com.nowin.server.Router;
 import com.nowin.server.VirtualHost;
 import org.slf4j.Logger;
@@ -32,14 +34,26 @@ public class HttpServerHandler implements ChannelHandler {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
+        long startTime = System.currentTimeMillis();
         HttpRequest request = (HttpRequest) msg;
         HttpResponse response = new HttpResponse();
         // Set response protocol version to match request
         response.setProtocolVersion(request.getProtocolVersion());
         
+        LoadMonitor loadMonitor = ctx.channel() != null ? ctx.channel().getLoadMonitor() : null;
+        MetricsCollector metricsCollector = ctx.channel() != null ? ctx.channel().getMetricsCollector() : null;
+        
+        if (loadMonitor != null) {
+            loadMonitor.requestProcessed();
+        }
+        if (metricsCollector != null) {
+            metricsCollector.recordRequest();
+        }
+        
         logger.debug("Processing request: {} {}, protocol: {}", request.getMethod(), request.getUri(), request.getProtocolVersion());
         
         HttpHandler handler = null;
+        boolean routeError = false;
         try {
             VirtualHost virtualHost = findVirtualHost(request);
             request.setVirtualHost(virtualHost);
@@ -61,20 +75,62 @@ public class HttpServerHandler implements ChannelHandler {
             logger.error("Error processing request: {} {}", request.getMethod(), request.getUri(), e);
             response.setStatusCode(500);
             response.setBody("Internal Server Error");
+            routeError = true;
         }
-        if (handler == null) {
-            ctx.fireExceptionCaught(new ResourceNotFoundException());
+        if (handler == null || routeError) {
+            long responseTime = System.currentTimeMillis() - startTime;
+            if (metricsCollector != null) {
+                metricsCollector.recordFailure(responseTime);
+            }
+            logger.warn("No handler found for request: {} {}", request.getMethod(), request.getUri());
+            if (ctx != null && !routeError) {
+                ctx.fireExceptionCaught(new ResourceNotFoundException());
+            }
+            ChannelFuture writeFuture = ctx.write(response.toByteBuffer());
+            writeFuture.addListener(future -> {
+                try { request.cleanup(); } catch (Exception ignored) {}
+                if (!request.isKeepAlive()) { ctx.close(); }
+            });
             return;
         }
 
+        boolean handlerError = false;
         try {
-            logger.debug("Calling handler: {} for request: {} {}", handler.getClass().getName(), request.getMethod(), request.getUri());
-            handler.handle(request, response);
-            logger.info("Request completed: {} {}, status: {}", request.getMethod(), request.getUri(), response.getStatusCode());
+            if ("TRACE".equalsIgnoreCase(request.getMethod())) {
+                handleTraceRequest(request, response);
+            } else {
+                logger.debug("Calling handler: {} for request: {} {}", handler.getClass().getName(), request.getMethod(), request.getUri());
+                handler.handle(request, response);
+                logger.info("Request completed: {} {}, status: {}", request.getMethod(), request.getUri(), response.getStatusCode());
+            }
         } catch (IOException e) {
             logger.error("Error processing request: {} {}", request.getMethod(), request.getUri(), e);
             response.setStatusCode(500);
             response.setBody("Internal Server Error");
+            handlerError = true;
+        }
+        
+        long responseTime = System.currentTimeMillis() - startTime;
+        if (metricsCollector != null) {
+            if (handlerError || response.getStatusCode() >= 500) {
+                metricsCollector.recordFailure(responseTime);
+            } else {
+                metricsCollector.recordSuccess(responseTime);
+            }
+        }
+
+        // Auto-enable compression for applicable responses
+        if (!"HEAD".equalsIgnoreCase(request.getMethod())) {
+            response.enableCompressionIfSupported(request);
+        }
+
+        // HEAD must not return a body, but Content-Length should match GET
+        if ("HEAD".equalsIgnoreCase(request.getMethod())) {
+            String contentLength = response.getHeader("Content-Length");
+            response.setBody(new byte[0]);
+            if (contentLength != null) {
+                response.setHeader("Content-Length", contentLength);
+            }
         }
 
         // Set connection header based on keep-alive
@@ -128,5 +184,23 @@ public class HttpServerHandler implements ChannelHandler {
         }
 
         return defaultVirtualHost;
+    }
+
+    private void handleTraceRequest(HttpRequest request, HttpResponse response) {
+        StringBuilder trace = new StringBuilder();
+        trace.append(request.getMethod()).append(" ")
+             .append(request.getUri()).append(" ")
+             .append(request.getProtocolVersion()).append("\r\n");
+        for (Map.Entry<String, String> header : request.getHeaders().entrySet()) {
+            String name = header.getKey();
+            if (!name.equalsIgnoreCase("authorization")
+                    && !name.equalsIgnoreCase("cookie")
+                    && !name.equalsIgnoreCase("proxy-authorization")) {
+                trace.append(name).append(": ").append(header.getValue()).append("\r\n");
+            }
+        }
+        response.setStatusCode(200);
+        response.setHeader("Content-Type", "message/http");
+        response.setBody(trace.toString());
     }
 }

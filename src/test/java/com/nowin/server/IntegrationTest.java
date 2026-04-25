@@ -7,6 +7,7 @@ import com.nowin.http.HttpResponse;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import java.io.IOException;
 import java.io.OutputStream;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
@@ -16,10 +17,11 @@ import static org.junit.jupiter.api.Assertions.*;
 public class IntegrationTest {
 
     private NioHttpServer server;
-    private final int port = 8090;
+    private int port;
 
     @BeforeEach
     void setUp() throws Exception {
+        port = findAvailablePort();
         server = ServerBootstrap.create()
                 .port(port)
                 .addRoute("/hello", new HttpHandler() {
@@ -29,7 +31,21 @@ public class IntegrationTest {
                     }
                 })
                 .start();
-        Thread.sleep(1000); // Wait for server to start
+        // Wait for server to actually bind and start accepting
+        for (int i = 0; i < 50; i++) {
+            Thread.sleep(100);
+            try (java.net.Socket testSocket = new java.net.Socket("localhost", port)) {
+                break; // server is ready
+            } catch (IOException e) {
+                // not ready yet
+            }
+        }
+    }
+
+    private int findAvailablePort() throws IOException {
+        try (java.net.ServerSocket socket = new java.net.ServerSocket(0)) {
+            return socket.getLocalPort();
+        }
     }
 
     @AfterEach
@@ -43,6 +59,7 @@ public class IntegrationTest {
     void testSimpleRequest() throws Exception {
         try (Socket socket = new Socket("localhost", port);
                 OutputStream out = socket.getOutputStream()) {
+            socket.setSoTimeout(5000);
 
             String request = "GET /hello HTTP/1.1\r\nHost: localhost\r\n\r\n";
             out.write(request.getBytes(StandardCharsets.US_ASCII));
@@ -63,6 +80,7 @@ public class IntegrationTest {
     void testFragmentedRequest() throws Exception {
         try (Socket socket = new Socket("localhost", port);
                 OutputStream out = socket.getOutputStream()) {
+            socket.setSoTimeout(5000);
 
             // Send first part of request
             String part1 = "GET /hello HTTP/1.1\r\nHo";

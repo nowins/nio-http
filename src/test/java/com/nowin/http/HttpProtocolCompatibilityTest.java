@@ -76,9 +76,8 @@ public class HttpProtocolCompatibilityTest {
 
         HttpRequest request = parser.parse(buffer);
         assertNotNull(request);
-        // Current implementation doesn't merge headers, it overwrites
-        // This test is to document current behavior and will fail if we fix it
-        assertEquals("text/plain", request.getHeaders().get("accept"));
+        // Now we merge headers according to RFC 7230
+        assertEquals("text/html, application/json, text/plain", request.getHeaders().get("accept"));
     }
 
     /**
@@ -201,7 +200,11 @@ public class HttpProtocolCompatibilityTest {
         
         HttpResponse response = new HttpResponse();
         response.setStatusCode(200);
-        response.setBody("This is a test response that should be compressed");
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 20; i++) {
+            sb.append("This is a test response that should be compressed with enough data. ");
+        }
+        response.setBody(sb.toString());
         
         // Enable compression if supported
         response.enableCompressionIfSupported(request);

@@ -427,7 +427,11 @@ class HttpResponseTest {
     @Test
     void testHttp10ResponseWithGzip() {
         response.setProtocolVersion("HTTP/1.0");
-        response.setBody("HTTP/1.0 Gzip Response");
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 20; i++) {
+            sb.append("HTTP/1.0 Gzip Response with enough content to trigger compression. ");
+        }
+        response.setBody(sb.toString());
         
         // Create a mock request that accepts gzip
         HttpRequest mockRequest = new HttpRequest();
