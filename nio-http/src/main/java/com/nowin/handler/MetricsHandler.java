@@ -1,12 +1,12 @@
 package com.nowin.handler;
 
-import com.nowin.core.EventLoop;
-import com.nowin.core.EventLoopGroup;
 import com.nowin.http.HttpRequest;
 import com.nowin.http.HttpResponse;
 import com.nowin.server.LoadMonitor;
 import com.nowin.server.MetricsCollector;
 import com.nowin.server.NioHttpServer;
+import com.nowin.transport.TransportEventLoop;
+import com.nowin.transport.TransportEventLoopGroup;
 
 public class MetricsHandler implements HttpHandler {
 
@@ -67,10 +67,10 @@ public class MetricsHandler implements HttpHandler {
         }
 
         // EventLoop metrics
-        EventLoopGroup workerGroup = server.getWorkerGroup();
+        TransportEventLoopGroup workerGroup = server.getWorkerGroup();
         if (workerGroup != null) {
             int loopIndex = 0;
-            for (EventLoop loop : workerGroup.getEventLoops()) {
+            for (TransportEventLoop loop : workerGroup.getEventLoops()) {
                 appendMetric(sb, "nio_http_eventloop_select_count", "counter", "Total select() calls",
                         "id", String.valueOf(loop.getId()), loop.getSelectCount());
                 appendMetric(sb, "nio_http_eventloop_select_empty_count", "counter", "Select calls returning 0 keys",

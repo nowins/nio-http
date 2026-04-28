@@ -9,6 +9,7 @@ module com.nowin.niohttp {
     exports com.nowin.handler;
     exports com.nowin.http;
     exports com.nowin.server;
+    exports com.nowin.transport;
 
     // Internal packages - not exported by default
     // Users should not depend on these directly

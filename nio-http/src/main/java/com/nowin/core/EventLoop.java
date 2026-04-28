@@ -1,7 +1,14 @@
 package com.nowin.core;
 
 import com.nowin.core.handler.AcceptHandler;
+import com.nowin.http.FileChannelBody;
 import com.nowin.pipeline.Channel;
+import com.nowin.transport.TransportChannel;
+import com.nowin.transport.TransportEventLoop;
+import com.nowin.transport.TransportSelectionKey;
+import com.nowin.transport.nio.NioSelectionKey;
+import com.nowin.transport.nio.NioServerChannel;
+import com.nowin.transport.nio.NioSocketChannel;
 import com.nowin.util.BufferPool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,7 +23,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
-public class EventLoop {
+public class EventLoop implements TransportEventLoop {
 
     private static final Logger logger = LoggerFactory.getLogger(EventLoop.class);
 
@@ -199,7 +206,7 @@ public class EventLoop {
                     channel.getMetricsCollector().recordBytesRead(bytesRead);
                 }
                 channel.updateLastReadTime();
-                channel.process(key);
+                channel.process(new NioSelectionKey(key, channel.transportChannel()));
             } else {
                 BufferPool.DEFAULT.release(buffer);
             }
@@ -211,24 +218,47 @@ public class EventLoop {
 
     private void handleWrite(SelectionKey key) throws IOException {
         Channel channel = (Channel) key.attachment();
-        Queue<ByteBuffer> writeQueue = channel.getWriteQueue();
+        Queue<Object> writeQueue = channel.getWriteQueue();
         SocketChannel clientChannel = (SocketChannel) key.channel();
         long totalWritten = 0;
         while (!writeQueue.isEmpty()) {
-            ByteBuffer buffer = writeQueue.peek();
-            logger.debug("writing remaining byte {} data to {}", buffer.remaining(), clientChannel.getRemoteAddress());
-            int written = clientChannel.write(buffer);
-            totalWritten += written;
-            logger.debug("write {} byte data to {}", written, clientChannel.getRemoteAddress());
-            if (written == 0) {
-                key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
-                break; // cannot write temporarily
+            Object task = writeQueue.peek();
+            if (task instanceof ByteBuffer buffer) {
+                logger.debug("writing remaining byte {} data to {}", buffer.remaining(), clientChannel.getRemoteAddress());
+                int written = clientChannel.write(buffer);
+                totalWritten += written;
+                logger.debug("write {} byte data to {}", written, clientChannel.getRemoteAddress());
+                if (written == 0) {
+                    key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
+                    break; // cannot write temporarily
+                }
+                if (buffer.hasRemaining()) {
+                    key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
+                    break;
+                }
+                channel.removeFromWriteQueue(); // all data is written, remove it and update queue size
+                BufferPool.DEFAULT.release(buffer);
+            } else if (task instanceof FileChannelBody body) {
+                long written = body.writeTo(clientChannel);
+                totalWritten += written;
+                logger.debug("transferTo wrote {} bytes to {}", written, clientChannel.getRemoteAddress());
+                if (body.isComplete()) {
+                    channel.removeFromWriteQueue();
+                    body.close();
+                } else {
+                    if (written == 0) {
+                        key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
+                    }
+                    // If written > 0 but not complete, loop continues to try again
+                    // If written == 0, break to wait for next writable event
+                    if (written == 0) {
+                        break;
+                    }
+                }
+            } else {
+                logger.warn("Unknown task type in writeQueue: {}", task.getClass().getName());
+                channel.removeFromWriteQueue();
             }
-            if (buffer.hasRemaining()) {
-                key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
-                break;
-            }
-            channel.removeFromWriteQueue(); // all data is written, remove it and update queue size
         }
         if (totalWritten > 0) {
             bytesWrittenTotal.addAndGet(totalWritten);
@@ -241,8 +271,10 @@ public class EventLoop {
     }
 
     public void handleWriteCompletion(Channel channel) {
-        SelectionKey key = channel.getSelectionKey();
-        key.interestOps(key.interestOps() & ~SelectionKey.OP_WRITE);
+        TransportSelectionKey key = channel.getSelectionKey();
+        if (key != null) {
+            key.interestOps(key.interestOps() & ~TransportSelectionKey.OP_WRITE);
+        }
         channel.onWriteCompletion();
     }
 
@@ -250,7 +282,8 @@ public class EventLoop {
         return Thread.currentThread() == thread;
     }
 
-    public void register(SelectableChannel channel, int ops, Object attachment) {
+    @Override
+    public void register(TransportChannel channel, int ops, Object attachment) {
         if (inEventLoop()) {
             register0(channel, ops, attachment);
         } else {
@@ -258,12 +291,22 @@ public class EventLoop {
         }
     }
 
-    public void register0(SelectableChannel channel, int ops, Object attachment) {
+    private void register0(TransportChannel channel, int ops, Object attachment) {
         try {
-            channel.register(selector, ops, attachment);
-        } catch (ClosedChannelException e) {
+            if (channel instanceof NioServerChannel nsc) {
+                nsc.javaChannel().register(selector, ops, attachment);
+            } else if (channel instanceof NioSocketChannel nsc) {
+                java.nio.channels.SelectionKey key = nsc.javaChannel().register(selector, ops, attachment);
+                nsc.setSelectionKey(new NioSelectionKey(key, nsc));
+            }
+        } catch (java.nio.channels.ClosedChannelException e) {
             throw new RuntimeException("failed to register channel", e);
         }
+    }
+
+    @Override
+    public void wakeup() {
+        selector.wakeup();
     }
 
     public void execute(Runnable task) {
@@ -366,11 +409,11 @@ public class EventLoop {
         while ((entry = idleChannels.peek()) != null && entry.expireTime <= now) {
             idleChannels.poll();
             Channel channel = entry.channel;
-            if (channel.javaChannel() == null || !channel.javaChannel().isOpen()) {
+            if (channel.transportChannel() == null || !channel.transportChannel().isOpen()) {
                 continue;
             }
             if (channel.isIdleTimeoutExpired()) {
-                logger.warn("Idle timeout expired for channel {}, closing", channel.javaChannel());
+                logger.warn("Idle timeout expired for channel {}, closing", channel.transportChannel());
                 channel.close();
             } else {
                 // Timeout was reset; reschedule
@@ -379,7 +422,7 @@ public class EventLoop {
         }
     }
 
-    public Selector getSelector() {
+    public java.nio.channels.Selector getSelector() {
         return selector;
     }
 

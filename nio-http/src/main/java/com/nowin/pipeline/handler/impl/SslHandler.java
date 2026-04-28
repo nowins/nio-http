@@ -2,6 +2,7 @@ package com.nowin.pipeline.handler.impl;
 
 import com.nowin.pipeline.ChannelHandlerContext;
 import com.nowin.pipeline.handler.ChannelHandler;
+import com.nowin.transport.TransportSelectionKey;
 import com.nowin.util.BufferPool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,7 +11,6 @@ import javax.net.ssl.SSLEngine;
 import javax.net.ssl.SSLEngineResult;
 import javax.net.ssl.SSLException;
 import java.nio.ByteBuffer;
-import java.nio.channels.SelectionKey;
 
 public class SslHandler implements ChannelHandler {
 
@@ -68,9 +68,9 @@ public class SslHandler implements ChannelHandler {
             BufferPool.DEFAULT.release(encryptedBuffer);
             ctx.channel().setReadBuffer(null);
             // Always re-enable OP_READ to wait for more data (handshake or application data)
-            SelectionKey key = ctx.getSelectionKey();
+            TransportSelectionKey key = ctx.getSelectionKey();
             if (key != null && key.isValid()) {
-                key.interestOps(key.interestOps() | SelectionKey.OP_READ);
+                key.interestOps(key.interestOps() | TransportSelectionKey.OP_READ);
             }
         }
     }

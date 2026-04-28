@@ -1,15 +1,16 @@
 package com.nowin.pipeline.handler.impl;
 
+import com.nowin.http.FileChannelBody;
 import com.nowin.pipeline.ChannelHandlerContext;
 import com.nowin.pipeline.handler.ChannelHandler;
+import com.nowin.transport.TransportSelectionKey;
+import com.nowin.transport.TransportSocketChannel;
 import com.nowin.util.BufferPool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.SocketChannel;
 
 public class HeadHandler implements ChannelHandler {
 
@@ -25,17 +26,43 @@ public class HeadHandler implements ChannelHandler {
 
     @Override
     public void channelWrite(ChannelHandlerContext ctx, Object msg) {
-        ByteBuffer buffer = (ByteBuffer) msg;
         com.nowin.pipeline.Channel channel = ctx.channel();
         if (channel == null) {
             // Test environment without a real channel; skip actual I/O
-            BufferPool.DEFAULT.release(buffer);
+            if (msg instanceof ByteBuffer buffer) {
+                BufferPool.DEFAULT.release(buffer);
+            }
             return;
         }
-        SocketChannel clientChannel = channel.javaChannel();
+        TransportSocketChannel clientChannel = channel.transportChannel();
         try {
-            int totalWritten = 0;
-            // make sure all data is written
+            if (msg instanceof ByteBuffer buffer) {
+                writeByteBuffer(ctx, channel, clientChannel, buffer);
+            } else if (msg instanceof FileChannelBody body) {
+                writeFileChannelBody(ctx, channel, clientChannel, body);
+            } else {
+                logger.warn("Unsupported message type in HeadHandler: {}", msg.getClass().getName());
+            }
+        } catch (Exception e) {
+            logger.error("Error writing response", e);
+            channel.getPipeline().completeLastWriteFuture(e);
+            ctx.fireExceptionCaught(e);
+            if (msg instanceof ByteBuffer buffer) {
+                BufferPool.DEFAULT.release(buffer);
+            } else if (msg instanceof FileChannelBody body) {
+                try {
+                    body.close();
+                } catch (IOException ex) {
+                    logger.warn("Error closing FileChannelBody after write failure", ex);
+                }
+            }
+        }
+    }
+
+    private void writeByteBuffer(ChannelHandlerContext ctx, com.nowin.pipeline.Channel channel,
+                                 TransportSocketChannel clientChannel, ByteBuffer buffer) throws IOException {
+        int totalWritten = 0;
+        try {
             while (buffer.hasRemaining()) {
                 int written = clientChannel.write(buffer);
                 totalWritten += written;
@@ -45,9 +72,9 @@ public class HeadHandler implements ChannelHandler {
                     channel.addToWrite(remaining);
                     logger.debug("add remaining {} byte data to pending list {}", buffer.remaining(), clientChannel.getRemoteAddress());
 
-                    SelectionKey key = ctx.getSelectionKey();
-                    key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
-                    key.selector().wakeup();
+                    TransportSelectionKey key = ctx.getSelectionKey();
+                    key.interestOps(key.interestOps() | TransportSelectionKey.OP_WRITE);
+                    channel.getEventLoop().wakeup();
                     return;
                 }
             }
@@ -57,16 +84,42 @@ public class HeadHandler implements ChannelHandler {
             }
 
             logger.debug("write data to {} completed", clientChannel.getRemoteAddress());
-            SelectionKey key = ctx.getSelectionKey();
-            key.interestOps(key.interestOps() & ~SelectionKey.OP_WRITE);
+            TransportSelectionKey key = ctx.getSelectionKey();
+            key.interestOps(key.interestOps() & ~TransportSelectionKey.OP_WRITE);
             channel.onWriteCompletion();
-        } catch (Exception e) {
-            logger.error("Error writing response", e);
-            channel.getPipeline().completeLastWriteFuture(e);
-            ctx.fireExceptionCaught(e);
         } finally {
             BufferPool.DEFAULT.release(buffer);
         }
+    }
+
+    private void writeFileChannelBody(ChannelHandlerContext ctx, com.nowin.pipeline.Channel channel,
+                                      TransportSocketChannel clientChannel, FileChannelBody body) throws IOException {
+        long totalWritten = 0;
+        while (!body.isComplete()) {
+            long written = body.writeTo(clientChannel);
+            totalWritten += written;
+            logger.debug("transferTo wrote {} bytes to {}", written, clientChannel.getRemoteAddress());
+            if (written == 0) {
+                // Socket buffer full, queue the body for EventLoop to continue
+                channel.addToWrite(body);
+                logger.debug("FileChannelBody partially transferred ({} remaining), queued for async write", body.remaining());
+
+                TransportSelectionKey key = ctx.getSelectionKey();
+                key.interestOps(key.interestOps() | TransportSelectionKey.OP_WRITE);
+                channel.getEventLoop().wakeup();
+                return;
+            }
+        }
+
+        if (totalWritten > 0 && channel.getMetricsCollector() != null) {
+            channel.getMetricsCollector().recordBytesWritten((int) Math.min(totalWritten, Integer.MAX_VALUE));
+        }
+
+        logger.debug("FileChannelBody transfer to {} completed", clientChannel.getRemoteAddress());
+        body.close();
+        TransportSelectionKey key = ctx.getSelectionKey();
+        key.interestOps(key.interestOps() & ~TransportSelectionKey.OP_WRITE);
+        channel.onWriteCompletion();
     }
 
     @Override

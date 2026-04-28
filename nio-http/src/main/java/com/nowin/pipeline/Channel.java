@@ -1,17 +1,19 @@
 package com.nowin.pipeline;
 
-import com.nowin.core.EventLoop;
 import com.nowin.core.handler.ConnectionLimiter;
+import com.nowin.http.FileChannelBody;
 import com.nowin.http.HttpRequest;
 import com.nowin.server.LoadMonitor;
 import com.nowin.server.MetricsCollector;
+import com.nowin.transport.TransportEventLoop;
+import com.nowin.transport.TransportSelectionKey;
+import com.nowin.transport.TransportSocketChannel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.SocketChannel;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -24,13 +26,13 @@ public class Channel {
     private static final Logger logger = LoggerFactory.getLogger(Channel.class);
     private static final int DEFAULT_MAX_WRITE_QUEUE_SIZE = 100;
 
-    private final SocketChannel socketChannel;
-    private final EventLoop eventLoop;
+    private final TransportSocketChannel transportSocketChannel;
+    private final TransportEventLoop eventLoop;
     private final ChannelPipeline pipeline;
-    private SelectionKey selectionKey;
+    private TransportSelectionKey selectionKey;
     private HttpRequest request;
     private ByteBuffer readBuffer;
-    private final Queue<ByteBuffer> writeQueue = new ConcurrentLinkedQueue<>();
+    private final Queue<Object> writeQueue = new ConcurrentLinkedQueue<>();
     private final AtomicInteger writeQueueSize = new AtomicInteger(0);
     private ConnectionLimiter connectionLimiter;
     private LoadMonitor loadMonitor;
@@ -39,8 +41,8 @@ public class Channel {
     private volatile long lastReadTime = System.currentTimeMillis();
     private int idleTimeoutMillis = 0;
 
-    public Channel(SocketChannel socketChannel, ChannelPipeline pipeline, EventLoop eventLoop) {
-        this.socketChannel = socketChannel;
+    public Channel(TransportSocketChannel transportSocketChannel, ChannelPipeline pipeline, TransportEventLoop eventLoop) {
+        this.transportSocketChannel = transportSocketChannel;
         this.pipeline = pipeline;
         this.eventLoop = eventLoop;
     }
@@ -98,7 +100,7 @@ public class Channel {
     }
 
     @SuppressWarnings("resource")
-    public void process(SelectionKey key) {
+    public void process(TransportSelectionKey key) {
         if (!key.isValid()) {
             logger.debug("invalid key: {}", key);
             return;
@@ -113,15 +115,15 @@ public class Channel {
         }
     }
 
-    public SocketChannel javaChannel() {
-        return socketChannel;
+    public TransportSocketChannel transportChannel() {
+        return transportSocketChannel;
     }
 
-    public SelectionKey getSelectionKey() {
-        return socketChannel.keyFor(eventLoop.getSelector());
+    public TransportSelectionKey getSelectionKey() {
+        return transportSocketChannel != null ? transportSocketChannel.selectionKey() : null;
     }
 
-    public EventLoop getEventLoop() {
+    public TransportEventLoop getEventLoop() {
         return eventLoop;
     }
 
@@ -129,24 +131,35 @@ public class Channel {
         return pipeline;
     }
 
-    public void addToWrite(ByteBuffer buffer) {
-        writeQueue.add(buffer);
+    public InetSocketAddress getRemoteAddress() {
+        if (transportSocketChannel != null) {
+            try {
+                return transportSocketChannel.getRemoteAddress();
+            } catch (IOException e) {
+                logger.error("Error getting remote address", e);
+            }
+        }
+        return null;
+    }
+
+    public void addToWrite(Object task) {
+        writeQueue.add(task);
         writeQueueSize.incrementAndGet();
     }
 
     /**
-     * remove first ByteBuffer from write queue and update queue size
-     * @return return first ByteBuffer from write queue, null if queue is empty
+     * remove first task from write queue and update queue size
+     * @return return first task from write queue, null if queue is empty
      */
-    public ByteBuffer removeFromWriteQueue() {
-        ByteBuffer buffer = writeQueue.poll();
-        if (buffer != null) {
+    public Object removeFromWriteQueue() {
+        Object task = writeQueue.poll();
+        if (task != null) {
             writeQueueSize.decrementAndGet();
         }
-        return buffer;
+        return task;
     }
 
-    public Queue<ByteBuffer> getWriteQueue() {
+    public Queue<Object> getWriteQueue() {
         return writeQueue;
     }
 
@@ -189,7 +202,16 @@ public class Channel {
                 request = null;
             }
             
-            // cleanup write queue
+            // cleanup write queue - close any FileChannelBody resources
+            for (Object task : writeQueue) {
+                if (task instanceof FileChannelBody body) {
+                    try {
+                        body.close();
+                    } catch (IOException e) {
+                        logger.warn("Error closing FileChannelBody on channel close", e);
+                    }
+                }
+            }
             writeQueue.clear();
             writeQueueSize.set(0);
             
@@ -200,9 +222,9 @@ public class Channel {
             }
             
             // close socket channel
-            if (socketChannel != null && socketChannel.isOpen()) {
-                socketChannel.close();
-                logger.info(socketChannel + " closed");
+            if (transportSocketChannel != null && transportSocketChannel.isOpen()) {
+                transportSocketChannel.close();
+                logger.info("{} closed", transportSocketChannel);
             }
         } catch (IOException e) {
             logger.error("Error closing channel", e);

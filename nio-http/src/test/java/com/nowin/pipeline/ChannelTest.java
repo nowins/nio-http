@@ -1,12 +1,12 @@
 package com.nowin.pipeline;
 
 import com.nowin.core.EventLoop;
+import com.nowin.transport.TransportSocketChannel;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.nio.ByteBuffer;
-import java.nio.channels.SocketChannel;
 import java.util.Queue;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class ChannelTest {
 
     private Channel channel;
-    private SocketChannel socketChannel;
+    private TransportSocketChannel socketChannel;
     private ChannelPipeline pipeline;
     private EventLoop eventLoop;
 
@@ -57,19 +57,19 @@ class ChannelTest {
         assertEquals(2, channel.getWriteQueue().size(), "Write queue size should be 2 after adding two buffers");
 
         // 移除一个缓冲区
-        ByteBuffer removedBuffer = channel.removeFromWriteQueue();
+        ByteBuffer removedBuffer = (ByteBuffer) channel.removeFromWriteQueue();
         assertNotNull(removedBuffer, "Should return a buffer when removing from non-empty queue");
         assertEquals(1, channel.getWriteQueue().size(), "Write queue size should be 1 after removing one buffer");
 
         // 移除剩余的缓冲区
-        removedBuffer = channel.removeFromWriteQueue();
+        removedBuffer = (ByteBuffer) channel.removeFromWriteQueue();
         assertNotNull(removedBuffer, "Should return a buffer when removing from non-empty queue");
         assertEquals(0, channel.getWriteQueue().size(), "Write queue size should be 0 after removing all buffers");
         assertFalse(channel.isWriteQueueFull(), "Write queue should not be full when empty");
         assertFalse(channel.hasPendingWrites(), "Should not have pending writes when queue is empty");
 
         // 从空队列移除
-        removedBuffer = channel.removeFromWriteQueue();
+        removedBuffer = (ByteBuffer) channel.removeFromWriteQueue();
         assertNull(removedBuffer, "Should return null when removing from empty queue");
         assertEquals(0, channel.getWriteQueue().size(), "Write queue size should remain 0 after removing from empty queue");
     }
@@ -150,16 +150,16 @@ class ChannelTest {
         channel.addToWrite(buffer3);
         
         // 按照顺序移除缓冲区
-        Queue<ByteBuffer> writeQueue = channel.getWriteQueue();
-        assertEquals("Buffer 1", new String(writeQueue.peek().array(), 0, 8), "First buffer should be Buffer 1");
+        Queue<Object> writeQueue = channel.getWriteQueue();
+        assertEquals("Buffer 1", new String(((ByteBuffer) writeQueue.peek()).array(), 0, 8), "First buffer should be Buffer 1");
         
-        ByteBuffer removed1 = channel.removeFromWriteQueue();
+        ByteBuffer removed1 = (ByteBuffer) channel.removeFromWriteQueue();
         assertEquals("Buffer 1", new String(removed1.array(), 0, 8), "First removed buffer should be Buffer 1");
         
-        ByteBuffer removed2 = channel.removeFromWriteQueue();
+        ByteBuffer removed2 = (ByteBuffer) channel.removeFromWriteQueue();
         assertEquals("Buffer 2", new String(removed2.array(), 0, 8), "Second removed buffer should be Buffer 2");
         
-        ByteBuffer removed3 = channel.removeFromWriteQueue();
+        ByteBuffer removed3 = (ByteBuffer) channel.removeFromWriteQueue();
         assertEquals("Buffer 3", new String(removed3.array(), 0, 8), "Third removed buffer should be Buffer 3");
     }
 }

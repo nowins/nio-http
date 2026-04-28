@@ -1,16 +1,17 @@
 package com.nowin.server;
 
-import com.nowin.core.EventLoopGroup;
 import com.nowin.core.handler.AcceptHandler;
 import com.nowin.core.handler.ConnectionLimiter;
+import com.nowin.transport.TransportEventLoopGroup;
+import com.nowin.transport.TransportFactory;
+import com.nowin.transport.TransportServerChannel;
+import com.nowin.transport.TransportSelectionKey;
+import com.nowin.transport.nio.NioTransportFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.nio.channels.ServerSocketChannel;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.spi.SelectorProvider;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -20,16 +21,15 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import com.nowin.server.ResourceCache;
-import com.nowin.server.SslContext;
 
 public class NioHttpServer {
 
     private static final Logger logger = LoggerFactory.getLogger(NioHttpServer.class);
 
-    private EventLoopGroup bossGroup;
-    private EventLoopGroup workerGroup;
-    private ServerSocketChannel serverSocketChannel;
+    private TransportEventLoopGroup bossGroup;
+    private TransportEventLoopGroup workerGroup;
+    private TransportServerChannel serverChannel;
+    private TransportFactory transportFactory = NioTransportFactory.INSTANCE;
 
     private Map<String, VirtualHost> virtualHosts;
     private VirtualHost defaultVirtualHost;
@@ -56,6 +56,10 @@ public class NioHttpServer {
             config.validate();
             this.config = config.copy();
         }
+    }
+
+    public void setTransportFactory(TransportFactory transportFactory) {
+        this.transportFactory = transportFactory;
     }
 
     /**
@@ -122,13 +126,13 @@ public class NioHttpServer {
     }
 
     public boolean isBound() {
-        return serverSocketChannel != null && serverSocketChannel.isOpen() && serverSocketChannel.socket().isBound();
+        return serverChannel != null && serverChannel.isOpen() && serverChannel.isBound();
     }
 
     public InetSocketAddress getBoundAddress() {
-        if (serverSocketChannel != null && serverSocketChannel.socket().isBound()) {
+        if (serverChannel != null && serverChannel.isBound()) {
             try {
-                return (InetSocketAddress) serverSocketChannel.getLocalAddress();
+                return serverChannel.getLocalAddress();
             } catch (IOException e) {
                 logger.error("Error getting bound address", e);
                 return null;
@@ -140,25 +144,25 @@ public class NioHttpServer {
     private void initEventLoopGroup() {
         logger.info("Initializing event loop groups.");
         if (config.getBossThreads() == 1) {
-            bossGroup = new EventLoopGroup(1);
+            bossGroup = transportFactory.createEventLoopGroup(1);
         } else {
-            bossGroup = new EventLoopGroup(config.getBossThreads());
+            bossGroup = transportFactory.createEventLoopGroup(config.getBossThreads());
         }
 
         int workerThreads = config.getWorkerThreads() <= 0 ? Runtime.getRuntime().availableProcessors() * 2
                 : config.getWorkerThreads();
-        workerGroup = new EventLoopGroup(workerThreads);
+        workerGroup = transportFactory.createEventLoopGroup(workerThreads);
     }
 
     private void bind() throws IOException {
         logger.info("Binding to {}:{}", config.getHost(), config.getPort());
-        serverSocketChannel = SelectorProvider.provider().openServerSocketChannel();
-        serverSocketChannel.configureBlocking(false);
-        serverSocketChannel.socket().setReuseAddress(config.isSoReuseAddr());
+        serverChannel = transportFactory.createServerChannel();
+        serverChannel.configureBlocking(false);
+        serverChannel.setOption(java.net.StandardSocketOptions.SO_REUSEADDR, config.isSoReuseAddr());
         if (config.getBacklogSize() > 0) {
-            serverSocketChannel.bind(new InetSocketAddress(config.getHost(), config.getPort()), config.getBacklogSize());
+            serverChannel.bind(new InetSocketAddress(config.getHost(), config.getPort()), config.getBacklogSize());
         } else {
-            serverSocketChannel.bind(new InetSocketAddress(config.getHost(), config.getPort()));
+            serverChannel.bind(new InetSocketAddress(config.getHost(), config.getPort()));
         }
 
         ConnectionLimiter connectionLimiter = new ConnectionLimiter() {
@@ -184,8 +188,8 @@ public class NioHttpServer {
         };
 
         AcceptHandler acceptHandler = new AcceptHandler(
-                workerGroup, connectionLimiter, config, loadMonitor, metricsCollector, channelInitializer);
-        bossGroup.next().register(serverSocketChannel, SelectionKey.OP_ACCEPT, acceptHandler);
+                workerGroup, connectionLimiter, config, loadMonitor, metricsCollector, channelInitializer, serverChannel);
+        bossGroup.next().register(serverChannel, TransportSelectionKey.OP_ACCEPT, acceptHandler);
     }
 
     private void startAcceptor() {
@@ -208,8 +212,8 @@ public class NioHttpServer {
         }
         logger.info("Stopping NioHttpServer...");
         try {
-            if (serverSocketChannel != null) {
-                serverSocketChannel.close();
+            if (serverChannel != null) {
+                serverChannel.close();
             }
         } catch (IOException e) {
             logger.error("Error closing server socket", e);
@@ -298,7 +302,7 @@ public class NioHttpServer {
         return metricsCollector;
     }
 
-    public EventLoopGroup getWorkerGroup() {
+    public TransportEventLoopGroup getWorkerGroup() {
         return workerGroup;
     }
     

@@ -26,7 +26,7 @@ public class HttpResponse {
     private String protocolVersion = "HTTP/1.1";
     private final Map<String, String> headers = new HashMap<>();
     private final Map<String, String> trailers = new HashMap<>();
-    private byte[] body;
+    private HttpBody httpBody;
     private List<byte[]> chunks;
     private boolean chunkedEncoding = false;
     private boolean gzipCompression = false;
@@ -100,13 +100,28 @@ public class HttpResponse {
             
             // Ensure Content-Length is set for HTTP/1.0
             if (!headers.containsKey("content-length")) {
-                setHeader("Content-Length", String.valueOf(body != null ? body.length : 0));
+                setHeader("Content-Length", String.valueOf(httpBody != null ? httpBody.contentLength() : 0));
             }
         }
     }
 
     public byte[] getBody() {
-        return body != null ? body.clone() : new byte[0];
+        if (httpBody instanceof ByteArrayBody bab) {
+            return bab.data().clone();
+        }
+        return new byte[0];
+    }
+
+    public HttpBody getHttpBody() {
+        return httpBody;
+    }
+
+    public void setBody(HttpBody body) {
+        closeOldBody();
+        this.httpBody = body;
+        if (!chunkedEncoding && httpBody != null) {
+            setHeader("Content-Length", String.valueOf(httpBody.contentLength()));
+        }
     }
 
     public void setBody(String body) {
@@ -114,9 +129,11 @@ public class HttpResponse {
     }
 
     public void setBody(String body, java.nio.charset.Charset charset) {
-        this.body = body.getBytes(charset);
+        closeOldBody();
+        byte[] bytes = body.getBytes(charset);
+        this.httpBody = new ByteArrayBody(bytes);
         if (!chunkedEncoding) {
-            setHeader("Content-Length", String.valueOf(this.body.length));
+            setHeader("Content-Length", String.valueOf(bytes.length));
         }
     }
 
@@ -137,9 +154,21 @@ public class HttpResponse {
     }
 
     public void setBody(byte[] body) {
-        this.body = body.clone();
+        closeOldBody();
+        byte[] bytes = body != null ? body.clone() : new byte[0];
+        this.httpBody = new ByteArrayBody(bytes);
         if (!chunkedEncoding) {
-            setHeader("Content-Length", String.valueOf(this.body.length));
+            setHeader("Content-Length", String.valueOf(bytes.length));
+        }
+    }
+
+    private void closeOldBody() {
+        if (httpBody != null) {
+            try {
+                httpBody.close();
+            } catch (IOException e) {
+                logger.warn("Error closing previous HttpBody", e);
+            }
         }
     }
 
@@ -157,7 +186,7 @@ public class HttpResponse {
             this.chunks = null;
             headers.remove("Transfer-Encoding");
             // Always set Content-Length, even if body is null
-            setHeader("Content-Length", String.valueOf(body != null ? body.length : 0));
+            setHeader("Content-Length", String.valueOf(httpBody != null ? httpBody.contentLength() : 0));
         }
     }
 
@@ -174,8 +203,11 @@ public class HttpResponse {
             // Cannot compress already chunked explicit chunks
             return;
         }
-        if (body == null || body.length == 0 || body.length < 512) {
+        if (httpBody == null || httpBody.contentLength() == 0 || httpBody.contentLength() < 512) {
             return; // Skip empty or very small bodies
+        }
+        if (!(httpBody instanceof ByteArrayBody)) {
+            return; // Only compress in-memory bodies
         }
         String contentType = getHeader("Content-Type");
         if (contentType != null) {
@@ -197,10 +229,11 @@ public class HttpResponse {
             if (!compressed && acceptEncoding.contains("gzip") && !gzipCompression) {
                 try {
                     ByteArrayOutputStream byteOut = new ByteArrayOutputStream();
+                    byte[] bodyBytes = ((ByteArrayBody) httpBody).data();
                     try (GZIPOutputStream gzipOut = new GZIPOutputStream(byteOut)) {
-                        gzipOut.write(body);
+                        gzipOut.write(bodyBytes);
                     }
-                    this.body = byteOut.toByteArray();
+                    this.httpBody = new ByteArrayBody(byteOut.toByteArray());
                     this.gzipCompression = true;
                     setHeader("Content-Encoding", "gzip");
                     compressed = true;
@@ -214,10 +247,11 @@ public class HttpResponse {
             if (!compressed && acceptEncoding.contains("deflate") && !gzipCompression) {
                 try {
                     ByteArrayOutputStream byteOut = new ByteArrayOutputStream();
+                    byte[] bodyBytes = ((ByteArrayBody) httpBody).data();
                     try (java.util.zip.DeflaterOutputStream deflateOut = new java.util.zip.DeflaterOutputStream(byteOut)) {
-                        deflateOut.write(body);
+                        deflateOut.write(bodyBytes);
                     }
-                    this.body = byteOut.toByteArray();
+                    this.httpBody = new ByteArrayBody(byteOut.toByteArray());
                     setHeader("Content-Encoding", "deflate");
                     compressed = true;
                 } catch (IOException e) {
@@ -226,8 +260,8 @@ public class HttpResponse {
             }
 
             // Update content length if not using chunked encoding
-            if (compressed && !chunkedEncoding) {
-                setHeader("Content-Length", String.valueOf(this.body.length));
+            if (compressed && !chunkedEncoding && httpBody != null) {
+                setHeader("Content-Length", String.valueOf(httpBody.contentLength()));
             }
             
             // Add Vary: Accept-Encoding for caching purposes
@@ -366,7 +400,7 @@ public class HttpResponse {
                 System.arraycopy(chunk, 0, combinedBody, position, chunk.length);
                 position += chunk.length;
             }
-            this.body = combinedBody;
+            this.httpBody = new ByteArrayBody(combinedBody);
         }
         
         // Ensure headers are correct for the protocol version
@@ -378,10 +412,7 @@ public class HttpResponse {
             headers.entrySet().removeIf(entry -> entry.getKey().equalsIgnoreCase("transfer-encoding"));
             
             // Calculate total body length
-            int totalBodyLength = 0;
-            if (body != null) {
-                totalBodyLength = body.length;
-            }
+            long totalBodyLength = httpBody != null ? httpBody.contentLength() : 0;
             
             // Set Content-Length header (override any existing)
             setHeader("Content-Length", String.valueOf(totalBodyLength));
@@ -447,16 +478,19 @@ public class HttpResponse {
                 }
             }
             // Add body as chunks if available and no explicit chunks
-            else if (body != null && body.length > 0) {
-                for (int i = 0; i < body.length; i += chunkSize) {
-                    int length = Math.min(chunkSize, body.length - i);
-                    byte[] chunkData = Arrays.copyOfRange(body, i, i + length);
+            else if (httpBody instanceof ByteArrayBody bab && bab.contentLength() > 0) {
+                byte[] bodyBytes = bab.data();
+                for (int i = 0; i < bodyBytes.length; i += chunkSize) {
+                    int length = Math.min(chunkSize, bodyBytes.length - i);
+                    byte[] chunkData = Arrays.copyOfRange(bodyBytes, i, i + length);
                     
                     allChunks.add(Integer.toHexString(length).getBytes(StandardCharsets.UTF_8));
                     allChunks.add(CRLF.getBytes(StandardCharsets.UTF_8));
                     allChunks.add(chunkData);
                     allChunks.add(CRLF.getBytes(StandardCharsets.UTF_8));
                 }
+            } else if (httpBody instanceof FileChannelBody) {
+                throw new UnsupportedOperationException("Chunked encoding with FileChannelBody must use streaming write, not toByteBuffer()");
             }
 
             // Final chunk
@@ -485,7 +519,7 @@ public class HttpResponse {
         } else {
             // Regular response - ensure we have Content-Length for HTTP/1.0
             if (protocolVersion.equalsIgnoreCase("HTTP/1.0") && !headers.containsKey("content-length")) {
-                setHeader("Content-Length", String.valueOf(body != null ? body.length : 0));
+                setHeader("Content-Length", String.valueOf(httpBody != null ? httpBody.contentLength() : 0));
                 // Reconstruct headers with Content-Length
                 headersBuffer = new StringBuilder();
                 headersBuffer.append(protocolVersion).append(" ").append(statusCode).append(" ").append(statusMessage).append(CRLF);
@@ -515,11 +549,19 @@ public class HttpResponse {
                 headersBytes = headersBuffer.toString().getBytes(StandardCharsets.UTF_8);
             }
             
-            int totalSize = headersBytes.length + (body != null ? body.length : 0);
+            if (httpBody instanceof FileChannelBody) {
+                // For zero-copy bodies, only return the headers; body is sent separately
+                ByteBuffer buffer = allocateResponseBuffer(headersBytes.length);
+                buffer.put(headersBytes);
+                buffer.flip();
+                return buffer;
+            }
+            int bodyLength = httpBody instanceof ByteArrayBody bab ? bab.data().length : 0;
+            int totalSize = headersBytes.length + bodyLength;
             ByteBuffer buffer = allocateResponseBuffer(totalSize);
             buffer.put(headersBytes);
-            if (body != null) {
-                buffer.put(body);
+            if (httpBody instanceof ByteArrayBody bab) {
+                buffer.put(bab.data());
             }
             buffer.flip();
             return buffer;

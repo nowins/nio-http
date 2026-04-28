@@ -42,8 +42,8 @@ public class ExceptionHandler implements ChannelHandler {
                 logMessage.append(", protocol: ").append(request.getProtocolVersion());
                 
                 // Add client IP if available
-                if (channel.javaChannel() != null && channel.javaChannel().socket() != null) {
-                    logMessage.append(", client: ").append(channel.javaChannel().socket().getRemoteSocketAddress());
+                if (channel.getRemoteAddress() != null) {
+                    logMessage.append(", client: ").append(channel.getRemoteAddress());
                 }
             }
         }

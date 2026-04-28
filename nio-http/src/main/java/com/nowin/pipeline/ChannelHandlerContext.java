@@ -2,11 +2,10 @@ package com.nowin.pipeline;
 
 import com.nowin.http.HttpRequest;
 import com.nowin.pipeline.handler.ChannelHandler;
+import com.nowin.transport.TransportSelectionKey;
+import com.nowin.transport.TransportSocketChannel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.nio.channels.SelectionKey;
-import java.nio.channels.SocketChannel;
 
 public class ChannelHandlerContext {
 
@@ -32,15 +31,15 @@ public class ChannelHandlerContext {
         return handler;
     }
 
-    public SocketChannel underlyingChannel() {
-        return pipeline.channel().javaChannel();
+    public TransportSocketChannel underlyingChannel() {
+        return pipeline.channel().transportChannel();
     }
 
     public Channel channel() {
         return pipeline.channel();
     }
 
-    public SelectionKey getSelectionKey() {
+    public TransportSelectionKey getSelectionKey() {
         return pipeline.channel().getSelectionKey();
     }
 

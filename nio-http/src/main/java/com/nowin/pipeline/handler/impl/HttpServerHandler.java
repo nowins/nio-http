@@ -2,6 +2,7 @@ package com.nowin.pipeline.handler.impl;
 
 import com.nowin.exception.ResourceNotFoundException;
 import com.nowin.handler.HttpHandler;
+import com.nowin.http.FileChannelBody;
 import com.nowin.http.HttpRequest;
 import com.nowin.http.HttpResponse;
 import com.nowin.pipeline.ChannelFuture;
@@ -11,11 +12,11 @@ import com.nowin.server.LoadMonitor;
 import com.nowin.server.MetricsCollector;
 import com.nowin.server.Router;
 import com.nowin.server.VirtualHost;
+import com.nowin.transport.TransportSelectionKey;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.nio.channels.SelectionKey;
 import java.util.Map;
 
 public class HttpServerHandler implements ChannelHandler {
@@ -140,7 +141,14 @@ public class HttpServerHandler implements ChannelHandler {
             response.setHeader("Connection", "close");
         }
 
-        ChannelFuture writeFuture = ctx.write(response.toByteBuffer());
+        ChannelFuture writeFuture;
+        if (response.getHttpBody() instanceof FileChannelBody) {
+            // Staged write: headers first, then body via zero-copy
+            ctx.write(response.toByteBuffer());
+            writeFuture = ctx.write(response.getHttpBody());
+        } else {
+            writeFuture = ctx.write(response.toByteBuffer());
+        }
         writeFuture.addListener(future -> {
             logger.debug("Write completed");
             try {
@@ -157,9 +165,9 @@ public class HttpServerHandler implements ChannelHandler {
             if (!request.isKeepAlive()) {  // check if we need to close the channel
                 ctx.close();
             } else {
-                SelectionKey key = ctx.channel().getSelectionKey();
+                TransportSelectionKey key = ctx.channel().getSelectionKey();
                 if (key != null && key.isValid()) {
-                    key.interestOps(key.interestOps() & ~SelectionKey.OP_WRITE | SelectionKey.OP_READ);
+                    key.interestOps(key.interestOps() & ~TransportSelectionKey.OP_WRITE | TransportSelectionKey.OP_READ);
                 }
             }
         });

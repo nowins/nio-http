@@ -1,5 +1,6 @@
 package com.nowin.handler;
 
+import com.nowin.http.FileChannelBody;
 import com.nowin.http.HttpPart;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,7 +25,6 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.stream.Collectors;
 
 public class FileRequestHandler implements HttpHandler {
     private static final Logger logger = LoggerFactory.getLogger(FileRequestHandler.class);
@@ -32,11 +32,9 @@ public class FileRequestHandler implements HttpHandler {
     // RFC 7231 HTTP date format for headers (e.g., Last-Modified, If-*)
     private static final DateTimeFormatter HTTP_DATE_FORMAT = DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss zzz")
             .withZone(ZoneId.of("GMT"));
-    // Display format for directory listings
-    private static final DateTimeFormatter DISPLAY_DATE_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
-            .withZone(ZoneId.systemDefault());
     private final MimeTypeResolver mimeTypeResolver;
     private final ResourceCache<String, byte[]> resourceCache;
+    private final DirectoryListingRenderer directoryListingRenderer;
 
     public FileRequestHandler(MimeTypeResolver mimeTypeResolver) {
         this(mimeTypeResolver, null);
@@ -45,6 +43,11 @@ public class FileRequestHandler implements HttpHandler {
     public FileRequestHandler(MimeTypeResolver mimeTypeResolver, ResourceCache<String, byte[]> resourceCache) {
         this.mimeTypeResolver = mimeTypeResolver;
         this.resourceCache = resourceCache;
+        try {
+            this.directoryListingRenderer = new DirectoryListingRenderer();
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to initialize directory listing renderer", e);
+        }
     }
 
     @Override
@@ -71,7 +74,13 @@ public class FileRequestHandler implements HttpHandler {
         }
 
         // Check if path exists
+        String method = request.getMethod().toUpperCase();
         if (!Files.exists(filePath)) {
+            // Allow PUT and MKCOL to create new resources
+            if ("PUT".equals(method) || "MKCOL".equals(method)) {
+                handleFileRequest(filePath, request, response);
+                return;
+            }
             logger.debug("File not found: {}", filePath);
             response.setStatusCode(404);
             response.setBody("File not found: " + requestUri);
@@ -79,7 +88,7 @@ public class FileRequestHandler implements HttpHandler {
         }
 
         // Check if path is a directory
-        if (Files.isDirectory(filePath) && "GET".equalsIgnoreCase(request.getMethod())) {
+        if (Files.isDirectory(filePath) && "GET".equalsIgnoreCase(method)) {
             handleDirectoryRequest(virtualHost, filePath, request, response);
         } else {
             handleFileRequest(filePath, request, response);
@@ -117,6 +126,12 @@ public class FileRequestHandler implements HttpHandler {
                 break;
             case "POST":
                 handlePostRequest(filePath, request, response);
+                break;
+            case "MKCOL":
+                handleMkcolRequest(filePath, request, response);
+                break;
+            case "MOVE":
+                handleMoveRequest(filePath, request, response);
                 break;
             case "OPTIONS":
                 handleOptionsRequest(filePath, request, response);
@@ -173,9 +188,15 @@ public class FileRequestHandler implements HttpHandler {
             return;
         }
 
-        // Read file content and set as response body
-        byte[] content = readFileWithCache(filePath, lastModified);
-        response.setBody(content);
+        // For large files, use zero-copy FileChannelBody to avoid loading entire file into memory
+        if (fileSize > MAX_CACHEABLE_SIZE) {
+            java.nio.channels.FileChannel fileChannel = java.nio.channels.FileChannel.open(filePath);
+            response.setBody(new FileChannelBody(fileChannel, 0, fileSize));
+        } else {
+            // Read file content and set as response body
+            byte[] content = readFileWithCache(filePath, lastModified);
+            response.setBody(content);
+        }
     }
 
     private byte[] readFileWithCache(Path filePath, long lastModified) throws IOException {
@@ -242,7 +263,7 @@ public class FileRequestHandler implements HttpHandler {
 
     private void handleOptionsRequest(Path filePath, HttpRequest request, HttpResponse response) throws IOException {
         // Return allowed methods
-        String allowedMethods = "GET, HEAD, PUT, DELETE, POST, OPTIONS, TRACE";
+        String allowedMethods = "GET, HEAD, PUT, DELETE, POST, MKCOL, MOVE, OPTIONS, TRACE";
         response.setStatusCode(200);
         response.setHeader("Allow", allowedMethods);
         response.setHeader("Content-Length", "0");
@@ -371,7 +392,7 @@ public class FileRequestHandler implements HttpHandler {
         return false;
     }
 
-    private static final long MAX_RANGE_SIZE = 8 * 1024 * 1024; // 8MB
+    private static final long MAX_RANGE_SIZE = Long.MAX_VALUE; // No practical limit for range requests
 
     private boolean handleRangeRequest(Path filePath, HttpRequest request, HttpResponse response, long fileSize) throws IOException {
         // Add Accept-Ranges header to indicate support for range requests
@@ -456,20 +477,9 @@ public class FileRequestHandler implements HttpHandler {
         response.setHeader("Content-Length", String.valueOf(contentLength));
         response.setHeader("Content-Range", String.format("bytes %d-%d/%d", start, end, fileSize));
 
-        // Read the requested range
-        try (java.nio.channels.FileChannel channel = java.nio.channels.FileChannel.open(filePath)) {
-            byte[] rangeContent = new byte[(int) contentLength];
-            ByteBuffer buffer = ByteBuffer.wrap(rangeContent);
-            channel.position(start);
-            int bytesRead = channel.read(buffer);
-            if (bytesRead != contentLength) {
-                logger.warn("Failed to read complete range: requested {}, read {}", contentLength, bytesRead);
-                response.setStatusCode(500);
-                response.setBody("Internal Server Error");
-                return true;
-            }
-            response.setBody(rangeContent);
-        }
+        // Use FileChannelBody for zero-copy range transfer
+        java.nio.channels.FileChannel fileChannel = java.nio.channels.FileChannel.open(filePath);
+        response.setBody(new FileChannelBody(fileChannel, start, contentLength));
 
         return true;
     }
@@ -600,61 +610,84 @@ public class FileRequestHandler implements HttpHandler {
         return null;
     }
 
+    private void handleMkcolRequest(Path filePath, HttpRequest request, HttpResponse response) throws IOException {
+        if (Files.exists(filePath)) {
+            response.setStatusCode(405);
+            response.setBody("Resource already exists");
+            return;
+        }
+        try {
+            Files.createDirectories(filePath);
+            response.setStatusCode(201);
+            response.setBody("Directory created");
+        } catch (IOException e) {
+            logger.warn("Failed to create directory: {}", filePath, e);
+            response.setStatusCode(409);
+            response.setBody("Failed to create directory: " + e.getMessage());
+        }
+    }
+
+    private void handleMoveRequest(Path filePath, HttpRequest request, HttpResponse response) throws IOException {
+        if (!Files.exists(filePath)) {
+            response.setStatusCode(404);
+            response.setBody("Source not found");
+            return;
+        }
+        Optional<String> destination = request.getHeader("Destination");
+        if (!destination.isPresent()) {
+            response.setStatusCode(400);
+            response.setBody("Missing Destination header");
+            return;
+        }
+        String destStr = destination.get();
+        Path destPath;
+        try {
+            destPath = resolveDestinationPath(destStr, request);
+        } catch (SecurityException e) {
+            response.setStatusCode(403);
+            response.setBody("Forbidden: " + e.getMessage());
+            return;
+        }
+        if (Files.exists(destPath)) {
+            response.setStatusCode(412);
+            response.setBody("Destination already exists");
+            return;
+        }
+        try {
+            Files.move(filePath, destPath);
+            response.setStatusCode(204);
+            response.setBody("Moved successfully");
+        } catch (IOException e) {
+            logger.warn("Failed to move {} to {}", filePath, destPath, e);
+            response.setStatusCode(500);
+            response.setBody("Move failed: " + e.getMessage());
+        }
+    }
+
+    private Path resolveDestinationPath(String destination, HttpRequest request) {
+        // Handle absolute URI like http://host/path
+        String path = destination;
+        if (path.contains("://")) {
+            int pathStart = path.indexOf('/', path.indexOf("://") + 3);
+            if (pathStart >= 0) {
+                path = path.substring(pathStart);
+            } else {
+                path = "/";
+            }
+        }
+        VirtualHost virtualHost = request.getVirtualHost();
+        Path root = virtualHost.getRootDirectory().normalize().toAbsolutePath();
+        Path resolved = root.resolve(path.startsWith("/") ? path.substring(1) : path).normalize();
+        if (!resolved.startsWith(root)) {
+            throw new SecurityException("Path traversal attempt");
+        }
+        return resolved;
+    }
+
     private void generateDirectoryListing(Path directoryPath, String requestUri, HttpResponse response)
             throws IOException {
-        // Set content type
         response.setHeader("Content-Type", "text/html; charset=UTF-8");
-
-        // Start building HTML response
-        StringBuilder html = new StringBuilder();
-        html.append("<!DOCTYPE html>")
-                .append("<html><head>")
-                .append("<title>Directory Listing: ").append(requestUri).append("</title>")
-                .append("<style>")
-                .append("body { font-family: Arial, sans-serif; margin: 20px; }")
-                .append("h1 { color: #333; }")
-                .append("table { width: 100%; border-collapse: collapse; margin-top: 20px; }")
-                .append("th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }")
-                .append("th { background-color: #f5f5f5; }")
-                .append("tr:hover { background-color: #f9f9f9; }")
-                .append(".size { text-align: right; }")
-                .append("</style>")
-                .append("</head><body>")
-                .append("<h1>Directory Listing: ").append(requestUri).append("</h1>")
-                .append("<table>")
-                .append("<tr><th>Name</th><th class='size'>Size</th><th>Last Modified</th></tr>");
-
-        // Add parent directory link if not root
-        if (!requestUri.equals("/")) {
-            String parentUri = requestUri.endsWith("/") ? requestUri.substring(0, requestUri.length() - 1) : requestUri;
-            parentUri = parentUri.substring(0, parentUri.lastIndexOf('/') + 1);
-            html.append("<tr><td><a href='").append(parentUri)
-                    .append("'>..</a></td><td class='size'></td><td></td></tr>");
-        }
-
-        // List directory contents
-        List<Path> entries = Files.list(directoryPath).sorted().collect(Collectors.toList());
-        for (Path entry : entries) {
-            String entryName = entry.getFileName().toString();
-            String entryUri = requestUri.endsWith("/") ? requestUri + entryName : requestUri + "/" + entryName;
-            if (Files.isDirectory(entry)) {
-                entryUri += "/";
-                entryName += "/";
-            }
-
-            BasicFileAttributes attrs = Files.readAttributes(entry, BasicFileAttributes.class);
-            String size = Files.isDirectory(entry) ? "" : String.valueOf(attrs.size());
-            String lastModified = DISPLAY_DATE_FORMAT.format(attrs.lastModifiedTime().toInstant());
-
-            html.append("<tr>")
-                    .append("<td><a href='").append(entryUri).append("'>").append(entryName).append("</a></td>")
-                    .append("<td class='size'>").append(size).append("</td>")
-                    .append("<td>").append(lastModified).append("</td>")
-                    .append("</tr>");
-        }
-
-        // Complete HTML response
-        html.append("</table></body></html>");
-        response.setBody(html.toString());
+        String html = directoryListingRenderer.render(directoryPath, requestUri);
+        response.setBody(html);
     }
 }

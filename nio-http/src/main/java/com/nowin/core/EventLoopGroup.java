@@ -1,10 +1,13 @@
 package com.nowin.core;
 
+import com.nowin.transport.TransportEventLoop;
+import com.nowin.transport.TransportEventLoopGroup;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executor;
 
-public class EventLoopGroup {
+public class EventLoopGroup implements TransportEventLoopGroup {
 
     private static final int DEFAULT_THREAD_COUNT = Runtime.getRuntime().availableProcessors() * 2;
     public static final int DEFAULT_EVENT_LOOP_THREADS = DEFAULT_THREAD_COUNT;
@@ -39,19 +42,22 @@ public class EventLoopGroup {
         }
     }
 
-    public EventLoop next() {
+    @Override
+    public TransportEventLoop next() {
         EventLoop loop = eventLoops.get(next);
         next = (next + 1) % nThreads;
         return loop;
     }
 
+    @Override
     public void shutdown() {
         for (EventLoop loop : eventLoops) {
             loop.shutdown();
         }
     }
 
-    public List<EventLoop> getEventLoops() {
+    @Override
+    public List<TransportEventLoop> getEventLoops() {
         return new ArrayList<>(eventLoops);
     }
 }

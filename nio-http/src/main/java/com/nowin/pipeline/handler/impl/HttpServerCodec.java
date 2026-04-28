@@ -4,14 +4,14 @@ import com.nowin.http.HttpRequest;
 import com.nowin.http.HttpRequestParser;
 import com.nowin.pipeline.ChannelHandlerContext;
 import com.nowin.pipeline.handler.ChannelHandler;
+import com.nowin.transport.TransportSelectionKey;
+import com.nowin.transport.TransportSocketChannel;
 import com.nowin.util.BufferPool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.SocketChannel;
 
 public class HttpServerCodec implements ChannelHandler {
 
@@ -29,11 +29,13 @@ public class HttpServerCodec implements ChannelHandler {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        SelectionKey key = ctx.getSelectionKey();
-        SocketChannel clientChannel = ctx.underlyingChannel();
+        TransportSelectionKey key = ctx.getSelectionKey();
+        TransportSocketChannel clientChannel = ctx.underlyingChannel();
         String remoteAddr = "unknown";
         try {
-            remoteAddr = clientChannel.getRemoteAddress().toString();
+            if (clientChannel != null) {
+                remoteAddr = clientChannel.getRemoteAddress().toString();
+            }
         } catch (IOException e) {
             logger.error("Error getting remote address", e);
         }
@@ -75,7 +77,7 @@ public class HttpServerCodec implements ChannelHandler {
         } else {
             // Request incomplete, need more data
             logger.debug("Request incomplete, need more data from {}", remoteAddr);
-            key.interestOps(key.interestOps() | SelectionKey.OP_READ);
+            key.interestOps(key.interestOps() | TransportSelectionKey.OP_READ);
         }
     }
 
@@ -90,11 +92,13 @@ public class HttpServerCodec implements ChannelHandler {
         ctx.fireExceptionCaught(cause);
     }
 
-    private void closeConnection(SelectionKey key) {
-        SocketChannel clientChannel = (SocketChannel) key.channel();
+    private void closeConnection(TransportSelectionKey key) {
+        TransportSocketChannel clientChannel = (TransportSocketChannel) key.channel();
         String remoteAddr = "unknown";
         try {
-            remoteAddr = clientChannel.getRemoteAddress().toString();
+            if (clientChannel != null) {
+                remoteAddr = clientChannel.getRemoteAddress().toString();
+            }
         } catch (IOException e) {
             logger.error("Error getting remote address", e);
         }
@@ -102,7 +106,9 @@ public class HttpServerCodec implements ChannelHandler {
         try {
             logger.debug("Closing connection: {}", remoteAddr);
             key.cancel();
-            clientChannel.close();
+            if (clientChannel != null) {
+                clientChannel.close();
+            }
             logger.debug("Connection closed: {}", remoteAddr);
         } catch (IOException e) {
             logger.error("Error closing connection: {}", remoteAddr, e);

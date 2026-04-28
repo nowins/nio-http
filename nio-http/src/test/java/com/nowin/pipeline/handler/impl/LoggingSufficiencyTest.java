@@ -11,6 +11,8 @@ import com.nowin.pipeline.Channel;
 import com.nowin.pipeline.ChannelHandlerContext;
 import com.nowin.pipeline.ChannelPipeline;
 import com.nowin.pipeline.handler.ChannelHandler;
+import com.nowin.transport.TransportSocketChannel;
+import com.nowin.transport.nio.NioSocketChannel;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
@@ -85,7 +87,8 @@ public class LoggingSufficiencyTest {
         // Trigger connection closed log
         try {
             // This will log a connection closed message
-            SocketChannel mockChannel = SocketChannel.open();
+            SocketChannel rawChannel = SocketChannel.open();
+            TransportSocketChannel mockChannel = new NioSocketChannel(rawChannel);
             ChannelPipeline pipeline = new ChannelPipeline()
                     .addLast("codec", codec);
             Channel channel = new Channel(mockChannel, pipeline, null);

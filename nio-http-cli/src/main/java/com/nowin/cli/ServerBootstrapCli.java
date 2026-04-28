@@ -28,7 +28,7 @@ public class ServerBootstrapCli {
             FileRequestHandler fileHandler = new FileRequestHandler(mimeTypeResolver);
             NioHttpServer server = ServerBootstrap.create()
                     .port(8081)
-                    .addVirtualHost(new VirtualHost("localhost", Paths.get(".")))
+                    .addVirtualHost(new VirtualHost("localhost", Paths.get("D:\\tmp")))
                     .addRoute("/hello", (request, response) -> {
                         response.setBody("Hello, world!");
                     })

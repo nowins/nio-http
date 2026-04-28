@@ -58,7 +58,7 @@ public class AccessLogMiddleware implements Middleware {
         String uri = request.getUri() != null ? request.getUri() : "-";
         String protocol = request.getProtocolVersion() != null ? request.getProtocolVersion() : "HTTP/1.1";
         int status = response.getStatusCode();
-        int bodySize = response.getBody() != null ? response.getBody().length : 0;
+        int bodySize = response.getHttpBody() != null ? (int) response.getHttpBody().contentLength() : 0;
 
         ACCESS_LOG.info("{} - - [{}] \"{} {} {}\" {} {} {}",
                 remote,
@@ -74,7 +74,7 @@ public class AccessLogMiddleware implements Middleware {
         String method = request.getMethod() != null ? request.getMethod() : "-";
         String uri = request.getUri() != null ? request.getUri() : "-";
         int status = response.getStatusCode();
-        int bodySize = response.getBody() != null ? response.getBody().length : 0;
+        int bodySize = response.getHttpBody() != null ? (int) response.getHttpBody().contentLength() : 0;
 
         ACCESS_LOG.info("{{\"timestamp\":\"{}\",\"remote\":\"{}\",\"method\":\"{}\",\"uri\":\"{}\",\"status\":{},\"bodySize\":{},\"durationMs\":{}}}",
                 Instant.now(),

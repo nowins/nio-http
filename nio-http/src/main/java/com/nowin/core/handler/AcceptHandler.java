@@ -1,68 +1,74 @@
 package com.nowin.core.handler;
 
 import com.nowin.core.EventHandler;
-import com.nowin.core.EventLoop;
-import com.nowin.core.EventLoopGroup;
 import com.nowin.pipeline.Channel;
 import com.nowin.pipeline.ChannelInitializer;
 import com.nowin.pipeline.ChannelPipeline;
 import com.nowin.server.LoadMonitor;
 import com.nowin.server.MetricsCollector;
 import com.nowin.server.ServerConfig;
+import com.nowin.transport.TransportEventLoop;
+import com.nowin.transport.TransportEventLoopGroup;
+import com.nowin.transport.TransportSelectionKey;
+import com.nowin.transport.TransportServerChannel;
+import com.nowin.transport.TransportSocketChannel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.StandardSocketOptions;
 import java.nio.channels.SelectionKey;
-import java.nio.channels.ServerSocketChannel;
-import java.nio.channels.SocketChannel;
 
 public class AcceptHandler implements EventHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(AcceptHandler.class);
 
-    private final EventLoopGroup eventLoopGroup;
+    private final TransportEventLoopGroup eventLoopGroup;
     private final ConnectionLimiter connectionLimiter;
     private final ServerConfig config;
     private final LoadMonitor loadMonitor;
     private final MetricsCollector metricsCollector;
     private final ChannelInitializer channelInitializer;
+    private final TransportServerChannel serverChannel;
 
-    public AcceptHandler(EventLoopGroup eventLoopGroup,
+    public AcceptHandler(TransportEventLoopGroup eventLoopGroup,
                          ConnectionLimiter connectionLimiter,
                          ServerConfig config,
                          LoadMonitor loadMonitor,
                          MetricsCollector metricsCollector,
-                         ChannelInitializer channelInitializer) {
+                         ChannelInitializer channelInitializer,
+                         TransportServerChannel serverChannel) {
         this.eventLoopGroup = eventLoopGroup;
         this.connectionLimiter = connectionLimiter;
         this.config = config;
         this.loadMonitor = loadMonitor;
         this.metricsCollector = metricsCollector;
         this.channelInitializer = channelInitializer;
+        this.serverChannel = serverChannel;
     }
 
     @Override
     public void handle(SelectionKey key) {
         try {
             if (connectionLimiter != null && !connectionLimiter.incrementConnectionCount()) {
-                rejectConnection(key);
+                rejectConnection();
                 return;
             }
 
             if (loadMonitor != null && loadMonitor.shouldRejectNewConnection()) {
-                rejectConnection(key);
+                rejectConnection();
                 loadMonitor.requestRejected();
                 return;
             }
 
-            ServerSocketChannel serverChannel = (ServerSocketChannel) key.channel();
-            SocketChannel clientChannel = serverChannel.accept();
+            TransportSocketChannel clientChannel = serverChannel.accept();
+            if (clientChannel == null) {
+                return;
+            }
             clientChannel.configureBlocking(false);
             configureSocketChannel(clientChannel);
 
-            EventLoop eventLoop = eventLoopGroup.next();
+            TransportEventLoop eventLoop = eventLoopGroup.next();
             ChannelPipeline pipeline = new ChannelPipeline();
             Channel channel = new Channel(clientChannel, pipeline, eventLoop);
             channel.setConnectionLimiter(connectionLimiter);
@@ -75,7 +81,7 @@ public class AcceptHandler implements EventHandler {
             channelInitializer.initChannel(pipeline, channel);
 
             pipeline.setChannel(channel);
-            eventLoop.register(clientChannel, SelectionKey.OP_READ, channel);
+            eventLoop.register(clientChannel, TransportSelectionKey.OP_READ, channel);
             if (connectionLimiter != null) {
                 connectionLimiter.onChannelOpened(channel);
             }
@@ -91,18 +97,19 @@ public class AcceptHandler implements EventHandler {
         }
     }
 
-    private void rejectConnection(SelectionKey key) throws IOException {
-        ServerSocketChannel serverChannel = (ServerSocketChannel) key.channel();
-        SocketChannel clientChannel = serverChannel.accept();
+    private void rejectConnection() throws IOException {
+        TransportSocketChannel clientChannel = serverChannel.accept();
         logger.warn("Connection rejected");
         try {
-            clientChannel.close();
+            if (clientChannel != null) {
+                clientChannel.close();
+            }
         } catch (IOException e) {
             logger.error("Error closing rejected connection", e);
         }
     }
 
-    private void configureSocketChannel(SocketChannel channel) throws IOException {
+    private void configureSocketChannel(TransportSocketChannel channel) throws IOException {
         if (config.isTcpNoDelay()) {
             channel.setOption(StandardSocketOptions.TCP_NODELAY, true);
         }
@@ -124,7 +131,7 @@ public class AcceptHandler implements EventHandler {
         applyTcpKeepAliveOptions(channel);
     }
 
-    private void applyTcpKeepAliveOptions(SocketChannel channel) {
+    private void applyTcpKeepAliveOptions(TransportSocketChannel channel) {
         try {
             Class<?> extendedOptionsClass = Class.forName("jdk.net.ExtendedSocketOptions");
             if (config.isTcpKeepAlive()) {
