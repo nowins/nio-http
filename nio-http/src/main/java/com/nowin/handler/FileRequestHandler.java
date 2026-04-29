@@ -89,7 +89,7 @@ public class FileRequestHandler implements HttpHandler {
 
         // Check if path is a directory
         if (Files.isDirectory(filePath) && "GET".equalsIgnoreCase(method)) {
-            handleDirectoryRequest(virtualHost, filePath, request, response);
+            handleDirectoryRequest(virtualHost, filePath, requestUri, request, response);
         } else {
             handleFileRequest(filePath, request, response);
         }
@@ -580,8 +580,8 @@ public class FileRequestHandler implements HttpHandler {
         return true;
     }
 
-    private void handleDirectoryRequest(VirtualHost virtualHost, Path directoryPath, HttpRequest request,
-                                        HttpResponse response) throws IOException {
+    private void handleDirectoryRequest(VirtualHost virtualHost, Path directoryPath, String requestUri,
+                                        HttpRequest request, HttpResponse response) throws IOException {
         // Check if directory listing is enabled
         if (!virtualHost.isDirectoryListingEnabled()) {
             response.setStatusCode(403);
@@ -597,7 +597,7 @@ public class FileRequestHandler implements HttpHandler {
         }
 
         // Generate directory listing
-        generateDirectoryListing(directoryPath, request.getUri(), response);
+        generateDirectoryListing(directoryPath, requestUri, response);
     }
 
     private Path findWelcomeFile(VirtualHost virtualHost, Path directoryPath) {
