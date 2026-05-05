@@ -6,6 +6,7 @@ module com.nowin.niohttp {
     requires static ch.qos.logback.core;
 
     // Public API packages
+    exports com.nowin;
     exports com.nowin.handler;
     exports com.nowin.http;
     exports com.nowin.server;
