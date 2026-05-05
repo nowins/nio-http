@@ -75,6 +75,7 @@ public class AcceptHandler implements EventHandler {
             channel.setLoadMonitor(loadMonitor);
             channel.setMetricsCollector(metricsCollector);
             channel.setWriteQueueCapacity(config.getWriteQueueCapacity());
+            channel.setWriteBufferWaterMarks(config.getWriteBufferLowWaterMark(), config.getWriteBufferHighWaterMark());
             channel.setIdleTimeout(config.getSocketTimeout());
 
             // Let the initializer assemble the pipeline

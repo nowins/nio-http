@@ -16,6 +16,8 @@ public class ServerConfigTest {
         assertEquals(10000, config.getMaxConnections());
         assertEquals(65536, config.getMaxHeaderSize());
         assertEquals(10L * 1024 * 1024, config.getMaxBodySize());
+        assertEquals(32L * 1024 * 1024, config.getWriteBufferLowWaterMark());
+        assertEquals(64L * 1024 * 1024, config.getWriteBufferHighWaterMark());
     }
 
     @Test
@@ -53,16 +55,33 @@ public class ServerConfigTest {
     }
 
     @Test
+    void testInvalidWriteBufferWaterMarksThrow() {
+        ServerConfig negativeLow = new ServerConfig().setWriteBufferLowWaterMark(-1);
+        IllegalArgumentException lowEx = assertThrows(IllegalArgumentException.class, negativeLow::validate);
+        assertTrue(lowEx.getMessage().contains("low water mark"));
+
+        ServerConfig highBelowLow = new ServerConfig()
+                .setWriteBufferLowWaterMark(1024)
+                .setWriteBufferHighWaterMark(512);
+        IllegalArgumentException highEx = assertThrows(IllegalArgumentException.class, highBelowLow::validate);
+        assertTrue(highEx.getMessage().contains("high water mark"));
+    }
+
+    @Test
     void testCopyCreatesIndependentInstance() {
         ServerConfig original = new ServerConfig();
         original.setPort(9090);
         original.setMaxHeaderSize(32768);
         original.setMaxBodySize(5 * 1024 * 1024);
+        original.setWriteBufferLowWaterMark(1024);
+        original.setWriteBufferHighWaterMark(2048);
 
         ServerConfig copy = original.copy();
         assertEquals(9090, copy.getPort());
         assertEquals(32768, copy.getMaxHeaderSize());
         assertEquals(5 * 1024 * 1024, copy.getMaxBodySize());
+        assertEquals(1024, copy.getWriteBufferLowWaterMark());
+        assertEquals(2048, copy.getWriteBufferHighWaterMark());
 
         copy.setPort(8081);
         assertEquals(9090, original.getPort());

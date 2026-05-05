@@ -1,11 +1,14 @@
 package com.nowin.pipeline;
 
 import com.nowin.core.EventLoop;
+import com.nowin.transport.TransportSelectionKey;
 import com.nowin.transport.TransportSocketChannel;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.net.InetSocketAddress;
+import java.net.SocketOption;
 import java.nio.ByteBuffer;
 import java.util.Queue;
 
@@ -161,5 +164,158 @@ class ChannelTest {
         
         ByteBuffer removed3 = (ByteBuffer) channel.removeFromWriteQueue();
         assertEquals("Buffer 3", new String(removed3.array(), 0, 8), "Third removed buffer should be Buffer 3");
+    }
+
+    @Test
+    void testWriteBufferWaterMarksToggleReadInterest() {
+        TestSelectionKey key = new TestSelectionKey(TransportSelectionKey.OP_READ);
+        Channel backpressureChannel = new Channel(new TestSocketChannel(key), pipeline, eventLoop);
+        backpressureChannel.setWriteBufferWaterMarks(512, 1024);
+
+        ByteBuffer first = ByteBuffer.allocate(600);
+        backpressureChannel.addToWrite(first);
+        assertEquals(600, backpressureChannel.getPendingWriteBytes());
+        assertTrue((key.interestOps() & TransportSelectionKey.OP_READ) != 0, "Read should remain enabled below high watermark");
+
+        ByteBuffer second = ByteBuffer.allocate(500);
+        backpressureChannel.addToWrite(second);
+        assertEquals(1100, backpressureChannel.getPendingWriteBytes());
+        assertFalse((key.interestOps() & TransportSelectionKey.OP_READ) != 0, "Read should pause at high watermark");
+        assertFalse(backpressureChannel.isWritable(), "Channel should not be writable at high watermark");
+
+        backpressureChannel.removeFromWriteQueue();
+        assertEquals(500, backpressureChannel.getPendingWriteBytes());
+        assertTrue((key.interestOps() & TransportSelectionKey.OP_READ) != 0, "Read should resume at low watermark");
+        assertTrue(backpressureChannel.isWritable(), "Channel should be writable again below high watermark");
+    }
+
+    @Test
+    void testPendingWriteBytesUseEnqueuedSize() {
+        ByteBuffer buffer = ByteBuffer.allocate(16);
+        buffer.put("hello".getBytes());
+        buffer.flip();
+
+        channel.addToWrite(buffer);
+        assertEquals(5, channel.getPendingWriteBytes());
+
+        buffer.position(buffer.limit());
+        channel.removeFromWriteQueue();
+
+        assertEquals(0, channel.getPendingWriteBytes(), "Pending bytes should subtract the original queued size");
+    }
+
+    private static final class TestSocketChannel implements TransportSocketChannel {
+        private final TransportSelectionKey selectionKey;
+
+        private TestSocketChannel(TransportSelectionKey selectionKey) {
+            this.selectionKey = selectionKey;
+        }
+
+        @Override
+        public TransportSelectionKey selectionKey() {
+            return selectionKey;
+        }
+
+        @Override
+        public int read(ByteBuffer dst) {
+            return 0;
+        }
+
+        @Override
+        public int write(ByteBuffer src) {
+            int remaining = src.remaining();
+            src.position(src.limit());
+            return remaining;
+        }
+
+        @Override
+        public boolean isOpen() {
+            return true;
+        }
+
+        @Override
+        public void close() {
+        }
+
+        @Override
+        public InetSocketAddress getRemoteAddress() {
+            return new InetSocketAddress("127.0.0.1", 0);
+        }
+
+        @Override
+        public InetSocketAddress getLocalAddress() {
+            return new InetSocketAddress("127.0.0.1", 0);
+        }
+
+        @Override
+        public <T> void setOption(SocketOption<T> option, T value) {
+        }
+
+        @Override
+        public <T> T getOption(SocketOption<T> option) {
+            return null;
+        }
+
+        @Override
+        public void configureBlocking(boolean block) {
+        }
+    }
+
+    private static final class TestSelectionKey implements TransportSelectionKey {
+        private int ops;
+        private Object attachment;
+
+        private TestSelectionKey(int ops) {
+            this.ops = ops;
+        }
+
+        @Override
+        public com.nowin.transport.TransportChannel channel() {
+            return null;
+        }
+
+        @Override
+        public boolean isValid() {
+            return true;
+        }
+
+        @Override
+        public void cancel() {
+        }
+
+        @Override
+        public int interestOps() {
+            return ops;
+        }
+
+        @Override
+        public void interestOps(int ops) {
+            this.ops = ops;
+        }
+
+        @Override
+        public boolean isReadable() {
+            return (ops & OP_READ) != 0;
+        }
+
+        @Override
+        public boolean isWritable() {
+            return (ops & OP_WRITE) != 0;
+        }
+
+        @Override
+        public boolean isAcceptable() {
+            return false;
+        }
+
+        @Override
+        public Object attachment() {
+            return attachment;
+        }
+
+        @Override
+        public void attach(Object attachment) {
+            this.attachment = attachment;
+        }
     }
 }

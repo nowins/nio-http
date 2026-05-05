@@ -22,6 +22,8 @@ public class ServerConfig {
     private boolean soReuseAddr;
     private int soLinger;
     private int writeQueueCapacity;
+    private long writeBufferLowWaterMark;
+    private long writeBufferHighWaterMark;
     private int socketTimeout;
     private boolean tcpKeepAlive;
     private int tcpKeepIdle;
@@ -44,6 +46,8 @@ public class ServerConfig {
         this.soReuseAddr = true;
         this.soLinger = -1;
         this.writeQueueCapacity = 100;
+        this.writeBufferLowWaterMark = 32L * 1024 * 1024;
+        this.writeBufferHighWaterMark = 64L * 1024 * 1024;
         this.socketTimeout = 0;
         this.tcpKeepAlive = true;
         this.tcpKeepIdle = 7200;
@@ -80,6 +84,12 @@ public class ServerConfig {
         }
         if (writeQueueCapacity < 1) {
             throw new IllegalArgumentException("Write queue capacity must be >= 1, got: " + writeQueueCapacity);
+        }
+        if (writeBufferLowWaterMark < 0) {
+            throw new IllegalArgumentException("Write buffer low water mark must be >= 0, got: " + writeBufferLowWaterMark);
+        }
+        if (writeBufferHighWaterMark <= 0 || writeBufferHighWaterMark < writeBufferLowWaterMark) {
+            throw new IllegalArgumentException("Write buffer high water mark must be > 0 and >= low water mark, got: " + writeBufferHighWaterMark);
         }
         if (soLinger < -1) {
             throw new IllegalArgumentException("SO_LINGER must be >= -1, got: " + soLinger);
@@ -119,6 +129,8 @@ public class ServerConfig {
         copy.soReuseAddr = this.soReuseAddr;
         copy.soLinger = this.soLinger;
         copy.writeQueueCapacity = this.writeQueueCapacity;
+        copy.writeBufferLowWaterMark = this.writeBufferLowWaterMark;
+        copy.writeBufferHighWaterMark = this.writeBufferHighWaterMark;
         copy.socketTimeout = this.socketTimeout;
         copy.tcpKeepAlive = this.tcpKeepAlive;
         copy.tcpKeepIdle = this.tcpKeepIdle;
@@ -173,6 +185,8 @@ public class ServerConfig {
         props.setProperty("server.soReuseAddr", String.valueOf(soReuseAddr));
         props.setProperty("server.soLinger", String.valueOf(soLinger));
         props.setProperty("server.writeQueueCapacity", String.valueOf(writeQueueCapacity));
+        props.setProperty("server.writeBufferLowWaterMark", String.valueOf(writeBufferLowWaterMark));
+        props.setProperty("server.writeBufferHighWaterMark", String.valueOf(writeBufferHighWaterMark));
         props.setProperty("server.socketTimeout", String.valueOf(socketTimeout));
         props.setProperty("server.tcpKeepAlive", String.valueOf(tcpKeepAlive));
         props.setProperty("server.tcpKeepIdle", String.valueOf(tcpKeepIdle));
@@ -222,6 +236,12 @@ public class ServerConfig {
         }
         if (props.containsKey("server.writeQueueCapacity")) {
             this.writeQueueCapacity = Integer.parseInt(props.getProperty("server.writeQueueCapacity"));
+        }
+        if (props.containsKey("server.writeBufferLowWaterMark")) {
+            this.writeBufferLowWaterMark = Long.parseLong(props.getProperty("server.writeBufferLowWaterMark"));
+        }
+        if (props.containsKey("server.writeBufferHighWaterMark")) {
+            this.writeBufferHighWaterMark = Long.parseLong(props.getProperty("server.writeBufferHighWaterMark"));
         }
         if (props.containsKey("server.socketTimeout")) {
             this.socketTimeout = Integer.parseInt(props.getProperty("server.socketTimeout"));
@@ -363,6 +383,24 @@ public class ServerConfig {
         return this;
     }
 
+    public long getWriteBufferLowWaterMark() {
+        return writeBufferLowWaterMark;
+    }
+
+    public ServerConfig setWriteBufferLowWaterMark(long writeBufferLowWaterMark) {
+        this.writeBufferLowWaterMark = writeBufferLowWaterMark;
+        return this;
+    }
+
+    public long getWriteBufferHighWaterMark() {
+        return writeBufferHighWaterMark;
+    }
+
+    public ServerConfig setWriteBufferHighWaterMark(long writeBufferHighWaterMark) {
+        this.writeBufferHighWaterMark = writeBufferHighWaterMark;
+        return this;
+    }
+
     public int getSocketTimeout() {
         return socketTimeout;
     }
@@ -442,6 +480,8 @@ public class ServerConfig {
                 ", soReuseAddr=" + soReuseAddr +
                 ", soLinger=" + soLinger +
                 ", writeQueueCapacity=" + writeQueueCapacity +
+                ", writeBufferLowWaterMark=" + writeBufferLowWaterMark +
+                ", writeBufferHighWaterMark=" + writeBufferHighWaterMark +
                 ", socketTimeout=" + socketTimeout +
                 ", tcpKeepAlive=" + tcpKeepAlive +
                 ", tcpKeepIdle=" + tcpKeepIdle +

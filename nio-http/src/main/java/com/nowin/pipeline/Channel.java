@@ -25,6 +25,8 @@ public class Channel {
 
     private static final Logger logger = LoggerFactory.getLogger(Channel.class);
     private static final int DEFAULT_MAX_WRITE_QUEUE_SIZE = 100;
+    private static final long DEFAULT_WRITE_BUFFER_LOW_WATER_MARK = 32L * 1024 * 1024;
+    private static final long DEFAULT_WRITE_BUFFER_HIGH_WATER_MARK = 64L * 1024 * 1024;
 
     private final TransportSocketChannel transportSocketChannel;
     private final TransportEventLoop eventLoop;
@@ -34,10 +36,15 @@ public class Channel {
     private ByteBuffer readBuffer;
     private final Queue<Object> writeQueue = new ConcurrentLinkedQueue<>();
     private final AtomicInteger writeQueueSize = new AtomicInteger(0);
+    private final java.util.concurrent.atomic.AtomicLong pendingWriteBytes = new java.util.concurrent.atomic.AtomicLong(0);
+    private final java.util.Map<Object, Long> pendingWriteSizes =
+            java.util.Collections.synchronizedMap(new java.util.IdentityHashMap<>());
     private ConnectionLimiter connectionLimiter;
     private LoadMonitor loadMonitor;
     private MetricsCollector metricsCollector;
     private int maxWriteQueueSize = DEFAULT_MAX_WRITE_QUEUE_SIZE;
+    private volatile long writeBufferLowWaterMark = DEFAULT_WRITE_BUFFER_LOW_WATER_MARK;
+    private volatile long writeBufferHighWaterMark = DEFAULT_WRITE_BUFFER_HIGH_WATER_MARK;
     private volatile long lastReadTime = System.currentTimeMillis();
     private int idleTimeoutMillis = 0;
 
@@ -74,7 +81,27 @@ public class Channel {
     }
     
     public boolean isWriteQueueFull() {
-        return writeQueueSize.get() >= maxWriteQueueSize;
+        return writeQueueSize.get() >= maxWriteQueueSize
+                || pendingWriteBytes.get() >= writeBufferHighWaterMark;
+    }
+
+    public boolean isWritable() {
+        return pendingWriteBytes.get() < writeBufferHighWaterMark;
+    }
+
+    public long getPendingWriteBytes() {
+        return pendingWriteBytes.get();
+    }
+
+    public void setWriteBufferWaterMarks(long lowWaterMark, long highWaterMark) {
+        if (lowWaterMark < 0) {
+            throw new IllegalArgumentException("lowWaterMark must be >= 0");
+        }
+        if (highWaterMark <= 0 || highWaterMark < lowWaterMark) {
+            throw new IllegalArgumentException("highWaterMark must be > 0 and >= lowWaterMark");
+        }
+        this.writeBufferLowWaterMark = lowWaterMark;
+        this.writeBufferHighWaterMark = highWaterMark;
     }
 
     public void updateLastReadTime() {
@@ -145,6 +172,12 @@ public class Channel {
     public void addToWrite(Object task) {
         writeQueue.add(task);
         writeQueueSize.incrementAndGet();
+        long bytes = estimatePendingBytes(task);
+        pendingWriteSizes.put(task, bytes);
+        long pendingBytes = pendingWriteBytes.addAndGet(bytes);
+        if (pendingBytes >= writeBufferHighWaterMark) {
+            updateReadInterest(false);
+        }
     }
 
     /**
@@ -155,6 +188,12 @@ public class Channel {
         Object task = writeQueue.poll();
         if (task != null) {
             writeQueueSize.decrementAndGet();
+            Long queuedBytes = pendingWriteSizes.remove(task);
+            long bytes = queuedBytes != null ? queuedBytes : estimatePendingBytes(task);
+            long pendingBytes = pendingWriteBytes.addAndGet(-bytes);
+            if (pendingBytes <= writeBufferLowWaterMark) {
+                updateReadInterest(true);
+            }
         }
         return task;
     }
@@ -214,6 +253,8 @@ public class Channel {
             }
             writeQueue.clear();
             writeQueueSize.set(0);
+            pendingWriteBytes.set(0);
+            pendingWriteSizes.clear();
             
             // close selection key
             if (selectionKey != null && selectionKey.isValid()) {
@@ -236,6 +277,36 @@ public class Channel {
             }
             if (loadMonitor != null) {
                 loadMonitor.connectionClosed();
+            }
+        }
+    }
+
+    private long estimatePendingBytes(Object task) {
+        if (task instanceof ByteBuffer buffer) {
+            return buffer.remaining();
+        }
+        if (task instanceof FileChannelBody body) {
+            return Math.max(0, body.remaining());
+        }
+        if (task instanceof byte[] bytes) {
+            return bytes.length;
+        }
+        return 1;
+    }
+
+    private void updateReadInterest(boolean enabled) {
+        TransportSelectionKey key = getSelectionKey();
+        if (key == null || !key.isValid()) {
+            return;
+        }
+        int ops = key.interestOps();
+        int newOps = enabled
+                ? ops | TransportSelectionKey.OP_READ
+                : ops & ~TransportSelectionKey.OP_READ;
+        if (newOps != ops) {
+            key.interestOps(newOps);
+            if (eventLoop != null) {
+                eventLoop.wakeup();
             }
         }
     }
