@@ -24,6 +24,7 @@ import java.io.IOException;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 
 public class ServerBootstrap {
 
@@ -37,6 +38,7 @@ public class ServerBootstrap {
     private final List<Plugin> plugins = new ArrayList<>();
     private final List<Middleware> middlewares = new ArrayList<>();
     private ChannelInitializer channelInitializer;
+    private Executor applicationExecutor;
     private boolean defaultEndpointsDisabled = false;
     private boolean autoShutdownHook = false;
     private volatile boolean frozen = false;
@@ -189,6 +191,19 @@ public class ServerBootstrap {
     }
 
     /**
+     * Configure the executor used for application route handlers.
+     * <p>
+     * When unset, route handlers run on the channel event loop for backward
+     * compatibility. Embedded applications should prefer an executor, often a
+     * virtual-thread executor on Java 21+.
+     */
+    public ServerBootstrap applicationExecutor(Executor applicationExecutor) {
+        checkFrozen();
+        this.applicationExecutor = applicationExecutor;
+        return this;
+    }
+
+    /**
      * Register a middleware that will be applied to all routes.
      * Middleware are executed in registration order.
      */
@@ -221,7 +236,7 @@ public class ServerBootstrap {
         // Build default channel initializer if user didn't provide one
         if (channelInitializer == null) {
             channelInitializer = new HttpChannelInitializer(
-                    virtualHosts, defaultVirtualHost, router, sslContext, config, null);
+                    virtualHosts, defaultVirtualHost, router, sslContext, config, null, applicationExecutor);
         }
 
         // Assemble immutable configuration

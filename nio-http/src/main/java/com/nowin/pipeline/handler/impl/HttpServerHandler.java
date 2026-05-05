@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.Map;
+import java.util.concurrent.Executor;
 
 public class HttpServerHandler implements ChannelHandler {
 
@@ -26,17 +27,40 @@ public class HttpServerHandler implements ChannelHandler {
     private final Router router;
     private final Map<String, VirtualHost> virtualHosts;
     private final VirtualHost defaultVirtualHost;
+    private final Executor applicationExecutor;
 
     public HttpServerHandler(Map<String, VirtualHost> virtualHosts, VirtualHost defaultVirtualHost, Router router) {
+        this(virtualHosts, defaultVirtualHost, router, null);
+    }
+
+    public HttpServerHandler(Map<String, VirtualHost> virtualHosts,
+                             VirtualHost defaultVirtualHost,
+                             Router router,
+                             Executor applicationExecutor) {
         this.router = router;
         this.virtualHosts = virtualHosts;
         this.defaultVirtualHost = defaultVirtualHost;
+        this.applicationExecutor = applicationExecutor;
     }
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
         long startTime = System.currentTimeMillis();
         HttpRequest request = (HttpRequest) msg;
+        if (applicationExecutor != null) {
+            try {
+                applicationExecutor.execute(() -> processRequest(ctx, request, startTime));
+            } catch (RuntimeException e) {
+                logger.error("Failed to submit request to application executor", e);
+                ctx.fireExceptionCaught(e);
+                ctx.close();
+            }
+            return;
+        }
+        processRequest(ctx, request, startTime);
+    }
+
+    private void processRequest(ChannelHandlerContext ctx, HttpRequest request, long startTime) {
         HttpResponse response = new HttpResponse();
         // Set response protocol version to match request
         response.setProtocolVersion(request.getProtocolVersion());
@@ -87,11 +111,7 @@ public class HttpServerHandler implements ChannelHandler {
             if (ctx != null && !routeError) {
                 ctx.fireExceptionCaught(new ResourceNotFoundException());
             }
-            ChannelFuture writeFuture = ctx.write(response.toByteBuffer());
-            writeFuture.addListener(future -> {
-                try { request.cleanup(); } catch (Exception ignored) {}
-                if (!request.isKeepAlive()) { ctx.close(); }
-            });
+            writeResponse(ctx, request, response);
             return;
         }
 
@@ -120,57 +140,71 @@ public class HttpServerHandler implements ChannelHandler {
             }
         }
 
-        // Auto-enable compression for applicable responses
-        if (!"HEAD".equalsIgnoreCase(request.getMethod())) {
-            response.enableCompressionIfSupported(request);
-        }
+        writeResponse(ctx, request, response);
+    }
 
-        // HEAD must not return a body, but Content-Length should match GET
-        if ("HEAD".equalsIgnoreCase(request.getMethod())) {
-            String contentLength = response.getHeader("Content-Length");
-            response.setBody(new byte[0]);
-            if (contentLength != null) {
-                response.setHeader("Content-Length", contentLength);
+    private void writeResponse(ChannelHandlerContext ctx, HttpRequest request, HttpResponse response) {
+        Runnable writeTask = () -> {
+            // Auto-enable compression for applicable responses
+            if (!"HEAD".equalsIgnoreCase(request.getMethod())) {
+                response.enableCompressionIfSupported(request);
             }
-        }
 
-        // Set connection header based on keep-alive
-        if (request.isKeepAlive()) {
-            response.setHeader("Connection", "keep-alive");
-        } else {
-            response.setHeader("Connection", "close");
-        }
-
-        ChannelFuture writeFuture;
-        if (response.getHttpBody() instanceof FileChannelBody) {
-            // Staged write: headers first, then body via zero-copy
-            ctx.write(response.toByteBuffer());
-            writeFuture = ctx.write(response.getHttpBody());
-        } else {
-            writeFuture = ctx.write(response.toByteBuffer());
-        }
-        writeFuture.addListener(future -> {
-            logger.debug("Write completed");
-            try {
-                // clean up request resources
-                request.cleanup();
-            } catch (Exception e) {
-                logger.error("Error cleaning up request resources", e);
-            }
-            if (!future.isSuccess()) {
-                logger.error("Error writing response", future.cause());
-                ctx.close();
-                return;
-            }
-            if (!request.isKeepAlive()) {  // check if we need to close the channel
-                ctx.close();
-            } else {
-                TransportSelectionKey key = ctx.channel().getSelectionKey();
-                if (key != null && key.isValid()) {
-                    key.interestOps(key.interestOps() & ~TransportSelectionKey.OP_WRITE | TransportSelectionKey.OP_READ);
+            // HEAD must not return a body, but Content-Length should match GET
+            if ("HEAD".equalsIgnoreCase(request.getMethod())) {
+                String contentLength = response.getHeader("Content-Length");
+                response.setBody(new byte[0]);
+                if (contentLength != null) {
+                    response.setHeader("Content-Length", contentLength);
                 }
             }
-        });
+
+            // Set connection header based on keep-alive
+            if (request.isKeepAlive()) {
+                response.setHeader("Connection", "keep-alive");
+            } else {
+                response.setHeader("Connection", "close");
+            }
+
+            ChannelFuture writeFuture;
+            if (response.getHttpBody() instanceof FileChannelBody) {
+                // Staged write: headers first, then body via zero-copy
+                ctx.write(response.toByteBuffer());
+                writeFuture = ctx.write(response.getHttpBody());
+            } else {
+                writeFuture = ctx.write(response.toByteBuffer());
+            }
+            writeFuture.addListener(future -> {
+                logger.debug("Write completed");
+                try {
+                    // clean up request resources
+                    request.cleanup();
+                } catch (Exception e) {
+                    logger.error("Error cleaning up request resources", e);
+                }
+                if (!future.isSuccess()) {
+                    logger.error("Error writing response", future.cause());
+                    ctx.close();
+                    return;
+                }
+                if (!request.isKeepAlive()) {  // check if we need to close the channel
+                    ctx.close();
+                } else {
+                    TransportSelectionKey key = ctx.channel().getSelectionKey();
+                    if (key != null && key.isValid()) {
+                        key.interestOps(key.interestOps() & ~TransportSelectionKey.OP_WRITE | TransportSelectionKey.OP_READ);
+                    }
+                }
+            });
+        };
+
+        if (ctx.channel() != null
+                && ctx.channel().getEventLoop() != null
+                && !ctx.channel().getEventLoop().inEventLoop()) {
+            ctx.channel().getEventLoop().execute(writeTask);
+        } else {
+            writeTask.run();
+        }
     }
 
     @Override

@@ -12,6 +12,9 @@ import java.nio.file.Path;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -21,6 +24,8 @@ public final class HttpServerBuilder {
 
     private final ServerBootstrap bootstrap = ServerBootstrap.create();
     private final MimeTypeResolver mimeTypeResolver = new MimeTypeResolver();
+    private Executor configuredExecutor;
+    private boolean virtualThreads = true;
 
     HttpServerBuilder() {
     }
@@ -68,6 +73,24 @@ public final class HttpServerBuilder {
         return this;
     }
 
+    public HttpServerBuilder sameThreadExecutor() {
+        this.configuredExecutor = null;
+        this.virtualThreads = false;
+        return this;
+    }
+
+    public HttpServerBuilder virtualThreads() {
+        this.configuredExecutor = null;
+        this.virtualThreads = true;
+        return this;
+    }
+
+    public HttpServerBuilder executor(Executor executor) {
+        this.configuredExecutor = Objects.requireNonNull(executor, "executor cannot be null");
+        this.virtualThreads = false;
+        return this;
+    }
+
     public HttpServerBuilder staticFiles(Path rootDirectory) {
         Objects.requireNonNull(rootDirectory, "rootDirectory cannot be null");
         bootstrap.setDefaultVirtualHost(new VirtualHost("localhost", rootDirectory));
@@ -86,7 +109,15 @@ public final class HttpServerBuilder {
     }
 
     public HttpServer build() {
-        return new DefaultHttpServer(bootstrap);
+        AutoCloseable ownedExecutor = null;
+        Executor applicationExecutor = configuredExecutor;
+        if (virtualThreads) {
+            ExecutorService executorService = Executors.newVirtualThreadPerTaskExecutor();
+            applicationExecutor = executorService;
+            ownedExecutor = executorService;
+        }
+        bootstrap.applicationExecutor(applicationExecutor);
+        return new DefaultHttpServer(bootstrap, ownedExecutor);
     }
 
     private static com.nowin.handler.HttpHandler adapt(RouteHandler handler) {
@@ -105,10 +136,12 @@ public final class HttpServerBuilder {
 
     private static final class DefaultHttpServer implements HttpServer {
         private final ServerBootstrap bootstrap;
+        private final AutoCloseable ownedExecutor;
         private volatile NioHttpServer delegate;
 
-        private DefaultHttpServer(ServerBootstrap bootstrap) {
+        private DefaultHttpServer(ServerBootstrap bootstrap, AutoCloseable ownedExecutor) {
             this.bootstrap = bootstrap;
+            this.ownedExecutor = ownedExecutor;
         }
 
         @Override
@@ -119,13 +152,13 @@ public final class HttpServerBuilder {
 
         @Override
         public CompletableFuture<Void> stop() {
-            return delegate != null ? delegate.shutdown() : CompletableFuture.completedFuture(null);
+            return closeAfter(delegate != null ? delegate.shutdown() : CompletableFuture.completedFuture(null));
         }
 
         @Override
         public CompletableFuture<Void> stop(long timeout, TimeUnit unit) {
             Objects.requireNonNull(unit, "unit cannot be null");
-            return delegate != null ? delegate.shutdown(timeout, unit) : CompletableFuture.completedFuture(null);
+            return closeAfter(delegate != null ? delegate.shutdown(timeout, unit) : CompletableFuture.completedFuture(null));
         }
 
         @Override
@@ -136,6 +169,21 @@ public final class HttpServerBuilder {
         @Override
         public java.net.InetSocketAddress address() {
             return delegate != null ? delegate.getBoundAddress() : null;
+        }
+
+        private CompletableFuture<Void> closeAfter(CompletableFuture<Void> shutdownFuture) {
+            return shutdownFuture.whenComplete((ignored, failure) -> closeOwnedExecutor());
+        }
+
+        private void closeOwnedExecutor() {
+            if (ownedExecutor == null) {
+                return;
+            }
+            try {
+                ownedExecutor.close();
+            } catch (Exception e) {
+                throw new IllegalStateException("Failed to close application executor", e);
+            }
         }
     }
 }

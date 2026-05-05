@@ -75,6 +75,28 @@ class HttpServerApiTest {
     }
 
     @Test
+    void builderRunsRoutesOnVirtualThreadsByDefault() throws Exception {
+        HttpServer server = HttpServer.builder()
+                .host("127.0.0.1")
+                .port(findAvailablePort())
+                .disableDefaultEndpoints()
+                .get("/thread", exchange -> exchange.text(Boolean.toString(Thread.currentThread().isVirtual())))
+                .build();
+
+        try {
+            server.start().join();
+
+            String response = sendRequest(server.address().getPort(),
+                    "GET /thread HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+
+            assertTrue(response.contains("HTTP/1.1 200 OK"));
+            assertTrue(response.endsWith("true"));
+        } finally {
+            server.stop().join();
+        }
+    }
+
+    @Test
     void stopBeforeStartIsNoop() {
         HttpServer server = HttpServer.builder()
                 .port(8080)

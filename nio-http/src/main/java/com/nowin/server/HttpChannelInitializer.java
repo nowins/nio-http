@@ -9,6 +9,7 @@ import com.nowin.pipeline.handler.impl.HttpServerHandler;
 import com.nowin.pipeline.handler.impl.SslHandler;
 
 import java.util.Map;
+import java.util.concurrent.Executor;
 
 /**
  * Default {@link ChannelInitializer} that assembles the standard HTTP server pipeline.
@@ -30,6 +31,7 @@ public class HttpChannelInitializer implements ChannelInitializer {
     private final SslContext sslContext;
     private final ServerConfig config;
     private final NioHttpServer server;
+    private final Executor applicationExecutor;
 
     public HttpChannelInitializer(Map<String, VirtualHost> virtualHosts,
                                   VirtualHost defaultVirtualHost,
@@ -37,12 +39,23 @@ public class HttpChannelInitializer implements ChannelInitializer {
                                   SslContext sslContext,
                                   ServerConfig config,
                                   NioHttpServer server) {
+        this(virtualHosts, defaultVirtualHost, router, sslContext, config, server, null);
+    }
+
+    public HttpChannelInitializer(Map<String, VirtualHost> virtualHosts,
+                                  VirtualHost defaultVirtualHost,
+                                  Router router,
+                                  SslContext sslContext,
+                                  ServerConfig config,
+                                  NioHttpServer server,
+                                  Executor applicationExecutor) {
         this.virtualHosts = virtualHosts;
         this.defaultVirtualHost = defaultVirtualHost;
         this.router = router;
         this.sslContext = sslContext;
         this.config = config;
         this.server = server;
+        this.applicationExecutor = applicationExecutor;
     }
 
     @Override
@@ -55,7 +68,7 @@ public class HttpChannelInitializer implements ChannelInitializer {
         pipeline.addLast("upgrade", new com.nowin.server.handler.HttpUpgradeHandler());
 
         pipeline.addLast("codec", new HttpServerCodec(config.getMaxHeaderSize(), config.getMaxBodySize()));
-        pipeline.addLast("handler", new HttpServerHandler(virtualHosts, defaultVirtualHost, router));
+        pipeline.addLast("handler", new HttpServerHandler(virtualHosts, defaultVirtualHost, router, applicationExecutor));
         pipeline.addLast("exceptionHandler", new ExceptionHandler());
     }
 }

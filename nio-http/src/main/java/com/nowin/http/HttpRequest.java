@@ -161,7 +161,7 @@ public class HttpRequest {
     public boolean isKeepAlive() {
         return getHeader("Connection")
                 .map(header -> header.equalsIgnoreCase("keep-alive"))
-                .orElse(protocolVersion.equalsIgnoreCase("HTTP/1.1"));
+                .orElse(protocolVersion == null || protocolVersion.equalsIgnoreCase("HTTP/1.1"));
     }
 
     public long getContentLength() {
