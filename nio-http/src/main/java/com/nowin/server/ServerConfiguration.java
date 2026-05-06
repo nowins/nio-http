@@ -22,6 +22,7 @@ public class ServerConfiguration {
     private final Router router;
     private final SslContext sslContext;
     private final List<Plugin> plugins;
+    private final List<HttpServerObserver> observers;
     private final List<Middleware> middlewares;
     private final boolean defaultEndpointsDisabled;
     private final boolean autoShutdownHook;
@@ -35,6 +36,7 @@ public class ServerConfiguration {
                         Router router,
                         SslContext sslContext,
                         List<Plugin> plugins,
+                        List<HttpServerObserver> observers,
                         List<Middleware> middlewares,
                         boolean defaultEndpointsDisabled,
                         boolean autoShutdownHook,
@@ -47,6 +49,7 @@ public class ServerConfiguration {
         this.router = Objects.requireNonNull(router, "router");
         this.sslContext = sslContext;
         this.plugins = List.copyOf(plugins);
+        this.observers = List.copyOf(observers);
         this.middlewares = List.copyOf(middlewares);
         this.defaultEndpointsDisabled = defaultEndpointsDisabled;
         this.autoShutdownHook = autoShutdownHook;
@@ -77,6 +80,10 @@ public class ServerConfiguration {
 
     public List<Plugin> getPlugins() {
         return plugins;
+    }
+
+    public List<HttpServerObserver> getObservers() {
+        return observers;
     }
 
     public List<Middleware> getMiddlewares() {

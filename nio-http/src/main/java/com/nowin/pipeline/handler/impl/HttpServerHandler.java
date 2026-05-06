@@ -9,7 +9,7 @@ import com.nowin.pipeline.ChannelFuture;
 import com.nowin.pipeline.ChannelHandlerContext;
 import com.nowin.pipeline.handler.ChannelHandler;
 import com.nowin.server.LoadMonitor;
-import com.nowin.server.MetricsCollector;
+import com.nowin.server.HttpServerObserver;
 import com.nowin.server.Router;
 import com.nowin.server.VirtualHost;
 import com.nowin.transport.TransportSelectionKey;
@@ -67,19 +67,18 @@ public class HttpServerHandler implements ChannelHandler {
         response.setProtocolVersion(request.getProtocolVersion());
         
         LoadMonitor loadMonitor = ctx.channel() != null ? ctx.channel().getLoadMonitor() : null;
-        MetricsCollector metricsCollector = ctx.channel() != null ? ctx.channel().getMetricsCollector() : null;
+        HttpServerObserver observer = ctx.channel() != null ? ctx.channel().getObserver() : HttpServerObserver.NOOP;
         
         if (loadMonitor != null) {
             loadMonitor.requestProcessed();
         }
-        if (metricsCollector != null) {
-            metricsCollector.recordRequest();
-        }
+        observer.onRequestStart(request);
         
         logger.debug("Processing request: {} {}, protocol: {}", request.getMethod(), request.getUri(), request.getProtocolVersion());
         
         HttpHandler handler = null;
         boolean routeError = false;
+        Throwable failureCause = null;
         try {
             VirtualHost virtualHost = findVirtualHost(request);
             request.setVirtualHost(virtualHost);
@@ -102,15 +101,15 @@ public class HttpServerHandler implements ChannelHandler {
             response.setStatusCode(500);
             response.setBody("Internal Server Error");
             routeError = true;
+            failureCause = e;
         }
         if (handler == null || routeError) {
             long responseTime = System.currentTimeMillis() - startTime;
-            if (metricsCollector != null) {
-                metricsCollector.recordFailure(responseTime);
-            }
             logger.warn("No handler found for request: {} {}", request.getMethod(), request.getUri());
+            Throwable cause = failureCause != null ? failureCause : new ResourceNotFoundException();
+            observer.onRequestFailure(request, response, cause, responseTime);
             if (ctx != null && !routeError) {
-                ctx.fireExceptionCaught(new ResourceNotFoundException());
+                ctx.fireExceptionCaught(cause);
             }
             writeResponse(ctx, request, response);
             return;
@@ -130,15 +129,14 @@ public class HttpServerHandler implements ChannelHandler {
             response.setStatusCode(500);
             response.setBody("Internal Server Error");
             handlerError = true;
+            failureCause = e;
         }
         
         long responseTime = System.currentTimeMillis() - startTime;
-        if (metricsCollector != null) {
-            if (handlerError || response.getStatusCode() >= 500) {
-                metricsCollector.recordFailure(responseTime);
-            } else {
-                metricsCollector.recordSuccess(responseTime);
-            }
+        if (handlerError || response.getStatusCode() >= 500) {
+            observer.onRequestFailure(request, response, failureCause, responseTime);
+        } else {
+            observer.onRequestComplete(request, response, responseTime);
         }
 
         writeResponse(ctx, request, response);

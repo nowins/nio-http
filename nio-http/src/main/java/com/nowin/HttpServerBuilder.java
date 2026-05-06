@@ -3,6 +3,7 @@ package com.nowin;
 import com.nowin.handler.FileRequestHandler;
 import com.nowin.handler.Middleware;
 import com.nowin.http.MimeTypeResolver;
+import com.nowin.server.HttpServerObserver;
 import com.nowin.server.NioHttpServer;
 import com.nowin.server.ServerConfig;
 import com.nowin.server.VirtualHost;
@@ -70,6 +71,11 @@ public final class HttpServerBuilder {
 
     public HttpServerBuilder use(Middleware middleware) {
         bootstrap.use(middleware);
+        return this;
+    }
+
+    public HttpServerBuilder observer(HttpServerObserver observer) {
+        bootstrap.observer(observer);
         return this;
     }
 

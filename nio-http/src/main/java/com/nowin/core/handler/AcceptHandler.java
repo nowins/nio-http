@@ -6,6 +6,7 @@ import com.nowin.pipeline.ChannelInitializer;
 import com.nowin.pipeline.ChannelPipeline;
 import com.nowin.server.LoadMonitor;
 import com.nowin.server.MetricsCollector;
+import com.nowin.server.HttpServerObserver;
 import com.nowin.server.ServerConfig;
 import com.nowin.transport.TransportEventLoop;
 import com.nowin.transport.TransportEventLoopGroup;
@@ -28,6 +29,7 @@ public class AcceptHandler implements EventHandler {
     private final ServerConfig config;
     private final LoadMonitor loadMonitor;
     private final MetricsCollector metricsCollector;
+    private final HttpServerObserver observer;
     private final ChannelInitializer channelInitializer;
     private final TransportServerChannel serverChannel;
 
@@ -36,6 +38,7 @@ public class AcceptHandler implements EventHandler {
                          ServerConfig config,
                          LoadMonitor loadMonitor,
                          MetricsCollector metricsCollector,
+                         HttpServerObserver observer,
                          ChannelInitializer channelInitializer,
                          TransportServerChannel serverChannel) {
         this.eventLoopGroup = eventLoopGroup;
@@ -43,6 +46,7 @@ public class AcceptHandler implements EventHandler {
         this.config = config;
         this.loadMonitor = loadMonitor;
         this.metricsCollector = metricsCollector;
+        this.observer = observer;
         this.channelInitializer = channelInitializer;
         this.serverChannel = serverChannel;
     }
@@ -74,6 +78,7 @@ public class AcceptHandler implements EventHandler {
             channel.setConnectionLimiter(connectionLimiter);
             channel.setLoadMonitor(loadMonitor);
             channel.setMetricsCollector(metricsCollector);
+            channel.setObserver(observer);
             channel.setWriteQueueCapacity(config.getWriteQueueCapacity());
             channel.setWriteBufferWaterMarks(config.getWriteBufferLowWaterMark(), config.getWriteBufferHighWaterMark());
             channel.setIdleTimeout(config.getSocketTimeout());

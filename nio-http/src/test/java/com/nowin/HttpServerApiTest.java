@@ -10,6 +10,7 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -91,6 +92,46 @@ class HttpServerApiTest {
 
             assertTrue(response.contains("HTTP/1.1 200 OK"));
             assertTrue(response.endsWith("true"));
+        } finally {
+            server.stop().join();
+        }
+    }
+
+    @Test
+    void builderRegistersObservers() throws Exception {
+        AtomicInteger starts = new AtomicInteger();
+        AtomicInteger completes = new AtomicInteger();
+
+        HttpServer server = HttpServer.builder()
+                .host("127.0.0.1")
+                .port(findAvailablePort())
+                .disableDefaultEndpoints()
+                .observer(new com.nowin.server.HttpServerObserver() {
+                    @Override
+                    public void onRequestStart(com.nowin.http.HttpRequest request) {
+                        starts.incrementAndGet();
+                    }
+
+                    @Override
+                    public void onRequestComplete(com.nowin.http.HttpRequest request,
+                                                  com.nowin.http.HttpResponse response,
+                                                  long durationMillis) {
+                        completes.incrementAndGet();
+                    }
+                })
+                .get("/observed", exchange -> exchange.text("observed"))
+                .build();
+
+        try {
+            server.start().join();
+
+            String response = sendRequest(server.address().getPort(),
+                    "GET /observed HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+
+            assertTrue(response.contains("HTTP/1.1 200 OK"));
+            assertTrue(response.contains("observed"));
+            assertEquals(1, starts.get());
+            assertEquals(1, completes.get());
         } finally {
             server.stop().join();
         }

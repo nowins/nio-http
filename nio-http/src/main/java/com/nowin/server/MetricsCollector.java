@@ -1,12 +1,14 @@
 package com.nowin.server;
 
+import com.nowin.http.HttpRequest;
+import com.nowin.http.HttpResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
-public class MetricsCollector {
+public class MetricsCollector implements HttpServerObserver {
 
     private static final Logger logger = LoggerFactory.getLogger(MetricsCollector.class);
 
@@ -32,6 +34,26 @@ public class MetricsCollector {
     public void recordFailure(long responseTimeMs) {
         failedRequests.increment();
         updateResponseTime(responseTimeMs);
+    }
+
+    @Override
+    public void onRequestStart(HttpRequest request) {
+        recordRequest();
+    }
+
+    @Override
+    public void onRequestComplete(HttpRequest request,
+                                  HttpResponse response,
+                                  long durationMillis) {
+        recordSuccess(durationMillis);
+    }
+
+    @Override
+    public void onRequestFailure(HttpRequest request,
+                                 HttpResponse response,
+                                 Throwable cause,
+                                 long durationMillis) {
+        recordFailure(durationMillis);
     }
 
     private void updateResponseTime(long timeMs) {

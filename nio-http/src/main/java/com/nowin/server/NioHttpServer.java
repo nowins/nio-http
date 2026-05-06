@@ -39,7 +39,9 @@ public class NioHttpServer {
     private PluginManager pluginManager;
     private LoadMonitor loadMonitor;
     private MetricsCollector metricsCollector;
+    private HttpServerObserver observer = HttpServerObserver.NOOP;
     private final List<Plugin> pendingPlugins = new ArrayList<>();
+    private final List<HttpServerObserver> pendingObservers = new ArrayList<>();
 
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicInteger connectionCount = new AtomicInteger(0);
@@ -78,6 +80,7 @@ public class NioHttpServer {
         for (Plugin plugin : configuration.getPlugins()) {
             this.pendingPlugins.add(plugin);
         }
+        this.pendingObservers.addAll(configuration.getObservers());
     }
 
     public void addPlugin(Plugin plugin) {
@@ -188,7 +191,7 @@ public class NioHttpServer {
         };
 
         AcceptHandler acceptHandler = new AcceptHandler(
-                workerGroup, connectionLimiter, config, loadMonitor, metricsCollector, channelInitializer, serverChannel);
+                workerGroup, connectionLimiter, config, loadMonitor, metricsCollector, observer, channelInitializer, serverChannel);
         bossGroup.next().register(serverChannel, TransportSelectionKey.OP_ACCEPT, acceptHandler);
     }
 
@@ -284,10 +287,15 @@ public class NioHttpServer {
         this.pluginManager = new PluginManager(this);
         this.loadMonitor = new LoadMonitor(config.getMaxConnections());
         this.metricsCollector = new MetricsCollector();
+        List<HttpServerObserver> observers = new ArrayList<>();
+        observers.add(metricsCollector);
+        observers.addAll(pendingObservers);
+        this.observer = new CompositeHttpServerObserver(observers);
         for (Plugin plugin : pendingPlugins) {
             pluginManager.registerPlugin(plugin);
         }
         pendingPlugins.clear();
+        pendingObservers.clear();
     }
 
     public PluginManager getPluginManager() {
@@ -300,6 +308,10 @@ public class NioHttpServer {
 
     public MetricsCollector getMetricsCollector() {
         return metricsCollector;
+    }
+
+    public HttpServerObserver getObserver() {
+        return observer;
     }
 
     public TransportEventLoopGroup getWorkerGroup() {

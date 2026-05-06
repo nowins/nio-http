@@ -5,6 +5,7 @@ import com.nowin.http.FileChannelBody;
 import com.nowin.http.HttpRequest;
 import com.nowin.server.LoadMonitor;
 import com.nowin.server.MetricsCollector;
+import com.nowin.server.HttpServerObserver;
 import com.nowin.transport.TransportEventLoop;
 import com.nowin.transport.TransportSelectionKey;
 import com.nowin.transport.TransportSocketChannel;
@@ -42,6 +43,7 @@ public class Channel {
     private ConnectionLimiter connectionLimiter;
     private LoadMonitor loadMonitor;
     private MetricsCollector metricsCollector;
+    private HttpServerObserver observer = HttpServerObserver.NOOP;
     private int maxWriteQueueSize = DEFAULT_MAX_WRITE_QUEUE_SIZE;
     private volatile long writeBufferLowWaterMark = DEFAULT_WRITE_BUFFER_LOW_WATER_MARK;
     private volatile long writeBufferHighWaterMark = DEFAULT_WRITE_BUFFER_HIGH_WATER_MARK;
@@ -72,6 +74,14 @@ public class Channel {
 
     public MetricsCollector getMetricsCollector() {
         return metricsCollector;
+    }
+
+    public void setObserver(HttpServerObserver observer) {
+        this.observer = observer != null ? observer : HttpServerObserver.NOOP;
+    }
+
+    public HttpServerObserver getObserver() {
+        return observer;
     }
     
     public void setWriteQueueCapacity(int capacity) {

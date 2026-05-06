@@ -13,6 +13,7 @@ import com.nowin.handler.MetricsHandler;
 import com.nowin.handler.Middleware;
 import com.nowin.http.MimeTypeResolver;
 import com.nowin.pipeline.ChannelInitializer;
+import com.nowin.server.HttpServerObserver;
 import com.nowin.server.NioHttpServer;
 import com.nowin.server.Plugin;
 import com.nowin.server.Router;
@@ -36,6 +37,7 @@ public class ServerBootstrap {
     private final MimeTypeResolver mimeTypeResolver = new MimeTypeResolver();
     private SslContext sslContext;
     private final List<Plugin> plugins = new ArrayList<>();
+    private final List<HttpServerObserver> observers = new ArrayList<>();
     private final List<Middleware> middlewares = new ArrayList<>();
     private ChannelInitializer channelInitializer;
     private Executor applicationExecutor;
@@ -166,6 +168,13 @@ public class ServerBootstrap {
         return this;
     }
 
+    public ServerBootstrap observer(HttpServerObserver observer) {
+        checkFrozen();
+        Objects.requireNonNull(observer, "Observer cannot be null");
+        this.observers.add(observer);
+        return this;
+    }
+
     public ServerBootstrap disableDefaultEndpoints() {
         checkFrozen();
         this.defaultEndpointsDisabled = true;
@@ -242,7 +251,7 @@ public class ServerBootstrap {
         // Assemble immutable configuration
         ServerConfiguration configuration = new ServerConfiguration(
                 config, virtualHosts, defaultVirtualHost, router,
-                sslContext, plugins, middlewares,
+                sslContext, plugins, observers, middlewares,
                 defaultEndpointsDisabled, autoShutdownHook,
                 mimeTypeResolver, resourceCache, channelInitializer
         );
