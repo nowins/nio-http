@@ -2,9 +2,9 @@ package com.nowin.pipeline.handler.impl;
 
 import com.nowin.exception.ResourceNotFoundException;
 import com.nowin.handler.HttpHandler;
-import com.nowin.http.FileChannelBody;
 import com.nowin.http.HttpRequest;
 import com.nowin.http.HttpResponse;
+import com.nowin.http.HttpResponseEncoder;
 import com.nowin.pipeline.ChannelFuture;
 import com.nowin.pipeline.ChannelHandlerContext;
 import com.nowin.pipeline.handler.ChannelHandler;
@@ -23,6 +23,7 @@ import java.util.concurrent.Executor;
 public class HttpServerHandler implements ChannelHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(HttpServerHandler.class);
+    private static final HttpResponseEncoder RESPONSE_ENCODER = new HttpResponseEncoder();
 
     private final Router router;
     private final Map<String, VirtualHost> virtualHosts;
@@ -166,13 +167,12 @@ public class HttpServerHandler implements ChannelHandler {
                 response.setHeader("Connection", "close");
             }
 
-            ChannelFuture writeFuture;
-            if (response.getHttpBody() instanceof FileChannelBody) {
-                // Staged write: headers first, then body via zero-copy
-                ctx.write(response.toByteBuffer());
-                writeFuture = ctx.write(response.getHttpBody());
-            } else {
-                writeFuture = ctx.write(response.toByteBuffer());
+            ChannelFuture writeFuture = null;
+            for (Object message : RESPONSE_ENCODER.encodeForWrite(response)) {
+                writeFuture = ctx.write(message);
+            }
+            if (writeFuture == null) {
+                writeFuture = ctx.write(RESPONSE_ENCODER.encode(response));
             }
             writeFuture.addListener(future -> {
                 logger.debug("Write completed");

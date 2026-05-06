@@ -2,6 +2,7 @@ package com.nowin.pipeline.handler.impl;
 
 import com.nowin.exception.InvalidRequestException;
 import com.nowin.http.HttpResponse;
+import com.nowin.http.HttpResponseEncoder;
 import com.nowin.pipeline.ChannelHandlerContext;
 import com.nowin.pipeline.handler.ChannelHandler;
 import org.slf4j.Logger;
@@ -13,6 +14,7 @@ import java.nio.charset.StandardCharsets;
 public class ExceptionHandler implements ChannelHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(ExceptionHandler.class);
+    private static final HttpResponseEncoder RESPONSE_ENCODER = new HttpResponseEncoder();
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
@@ -94,6 +96,6 @@ public class ExceptionHandler implements ChannelHandler {
         response.setHeader("Content-Length", String.valueOf(bodyBytes.length));
         response.setHeader("Connection", "close");
         
-        ctx.fireChannelWrite(response.toByteBuffer());
+        ctx.fireChannelWrite(RESPONSE_ENCODER.encode(response));
     }
 }
