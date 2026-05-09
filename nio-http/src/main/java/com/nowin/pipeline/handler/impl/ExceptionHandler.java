@@ -5,10 +5,10 @@ import com.nowin.http.HttpResponse;
 import com.nowin.http.HttpResponseEncoder;
 import com.nowin.pipeline.ChannelHandlerContext;
 import com.nowin.pipeline.handler.ChannelHandler;
+import com.nowin.util.ConnectionExceptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
 public class ExceptionHandler implements ChannelHandler {
@@ -28,6 +28,11 @@ public class ExceptionHandler implements ChannelHandler {
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        if (ConnectionExceptions.isClientDisconnect(cause)) {
+            logger.debug("Connection reset by peer, channel: {}", ctx != null && ctx.channel() != null ? ctx.channel() : "unknown");
+            return;
+        }
+
         // Build detailed log message with context information
         StringBuilder logMessage = new StringBuilder("Exception caught in pipeline");
         
@@ -55,8 +60,6 @@ public class ExceptionHandler implements ChannelHandler {
         // handle specific exceptions
         if (cause instanceof InvalidRequestException) {
             sendErrorResponse(ctx, 400, "Bad Request", cause.getMessage());
-        } else if (isConnectionReset(cause)) {
-            logger.debug("Connection reset by peer, channel: {}", ctx != null && ctx.channel() != null ? ctx.channel() : "unknown");
         } else if (cause instanceof IllegalArgumentException || cause instanceof ClassCastException) {
             sendErrorResponse(ctx, 400, "Bad Request", "Invalid request parameters");
         } else if (cause instanceof NullPointerException) {
@@ -67,14 +70,6 @@ public class ExceptionHandler implements ChannelHandler {
             // all other exceptions
             sendErrorResponse(ctx, 500, "Internal Server Error", "An unexpected error occurred");
         }
-    }
-
-    private boolean isConnectionReset(Throwable cause) {
-        if (cause instanceof IOException) {
-            String msg = cause.getMessage();
-            return msg != null && (msg.contains("Connection reset by peer") || msg.contains("Broken pipe"));
-        }
-        return false;
     }
 
     private void sendErrorResponse(ChannelHandlerContext ctx, int statusCode, String statusText, String body) {

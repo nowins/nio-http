@@ -1,12 +1,31 @@
 package com.nowin.core;
 
+import com.nowin.pipeline.Channel;
+import com.nowin.pipeline.ChannelHandlerContext;
+import com.nowin.pipeline.ChannelPipeline;
+import com.nowin.pipeline.handler.ChannelHandler;
+import com.nowin.transport.nio.NioSelectionKey;
+import com.nowin.transport.nio.NioSocketChannel;
+import com.nowin.util.BufferPool;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+
+import java.lang.reflect.Method;
+import java.net.InetSocketAddress;
+import java.nio.ByteBuffer;
+import java.nio.channels.CancelledKeyException;
+import java.nio.channels.SelectableChannel;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -230,5 +249,119 @@ class EventLoopTest {
         boolean completed = latch.await(2000, TimeUnit.MILLISECONDS);
         assertTrue(completed, "All tasks should have been processed within 2 seconds");
         assertEquals(20, taskCount.get(), "All 20 tasks should have been executed");
+    }
+
+    @Test
+    void testCancelledKeyDuringReadDoesNotPropagateException() throws Exception {
+        AtomicBoolean readHandled = new AtomicBoolean(false);
+        AtomicReference<Throwable> propagatedException = new AtomicReference<>();
+
+        try (ServerSocketChannel server = ServerSocketChannel.open();
+             SocketChannel client = SocketChannel.open()) {
+            server.bind(new InetSocketAddress("127.0.0.1", 0));
+            client.connect(server.getLocalAddress());
+
+            try (SocketChannel accepted = server.accept()) {
+                accepted.configureBlocking(false);
+                client.write(ByteBuffer.wrap("GET / HTTP/1.1\r\n\r\n".getBytes(StandardCharsets.US_ASCII)));
+
+                TestSelectionKey selectionKey = new TestSelectionKey(
+                        accepted,
+                        SelectionKey.OP_READ | SelectionKey.OP_WRITE,
+                        SelectionKey.OP_READ | SelectionKey.OP_WRITE);
+                NioSocketChannel transportChannel = new NioSocketChannel(accepted);
+                transportChannel.setSelectionKey(new NioSelectionKey(selectionKey, transportChannel));
+
+                ChannelPipeline pipeline = new ChannelPipeline();
+                Channel channel = new Channel(transportChannel, pipeline, eventLoop);
+                pipeline.setChannel(channel);
+                pipeline.addLast("cancel-on-read", new ChannelHandler() {
+                    @Override
+                    public void channelRead(ChannelHandlerContext ctx, Object msg) {
+                        readHandled.set(true);
+                        if (msg instanceof ByteBuffer buffer) {
+                            BufferPool.DEFAULT.release(buffer);
+                        }
+                        ctx.getSelectionKey().cancel();
+                        ctx.close();
+                    }
+
+                    @Override
+                    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+                        propagatedException.set(cause);
+                    }
+                });
+                selectionKey.attach(channel);
+
+                invokeProcessSelectionKey(selectionKey);
+
+                assertTrue(readHandled.get(), "Read handler should have been invoked");
+                assertNull(propagatedException.get(), "Cancelled key should not be propagated through the pipeline");
+            }
+        }
+    }
+
+    private void invokeProcessSelectionKey(SelectionKey key) throws Exception {
+        Method method = EventLoop.class.getDeclaredMethod("processSelectionKey", SelectionKey.class);
+        method.setAccessible(true);
+        method.invoke(eventLoop, key);
+    }
+
+    private static final class TestSelectionKey extends SelectionKey {
+        private final SocketChannel channel;
+        private final int readyOps;
+        private int interestOps;
+        private boolean valid = true;
+
+        private TestSelectionKey(SocketChannel channel, int interestOps, int readyOps) {
+            this.channel = channel;
+            this.interestOps = interestOps;
+            this.readyOps = readyOps;
+        }
+
+        @Override
+        public SelectableChannel channel() {
+            return channel;
+        }
+
+        @Override
+        public Selector selector() {
+            return null;
+        }
+
+        @Override
+        public boolean isValid() {
+            return valid;
+        }
+
+        @Override
+        public void cancel() {
+            valid = false;
+        }
+
+        @Override
+        public int interestOps() {
+            if (!valid) {
+                throw new CancelledKeyException();
+            }
+            return interestOps;
+        }
+
+        @Override
+        public SelectionKey interestOps(int ops) {
+            if (!valid) {
+                throw new CancelledKeyException();
+            }
+            interestOps = ops;
+            return this;
+        }
+
+        @Override
+        public int readyOps() {
+            if (!valid) {
+                throw new CancelledKeyException();
+            }
+            return readyOps;
+        }
     }
 }

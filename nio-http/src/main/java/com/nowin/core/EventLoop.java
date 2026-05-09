@@ -10,6 +10,7 @@ import com.nowin.transport.nio.NioSelectionKey;
 import com.nowin.transport.nio.NioServerChannel;
 import com.nowin.transport.nio.NioSocketChannel;
 import com.nowin.util.BufferPool;
+import com.nowin.util.ConnectionExceptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -166,12 +167,34 @@ public class EventLoop implements TransportEventLoop {
         try {
             if (key.isAcceptable()) {
                 handleAccept(key);
+                if (!key.isValid()) {
+                    return;
+                }
             }
             if (key.isReadable()) {
                 handleRead(key);
+                if (!key.isValid()) {
+                    return;
+                }
             }
             if (key.isWritable()) {
                 handleWrite(key);
+            }
+        } catch (CancelledKeyException e) {
+            logger.debug("Selection key cancelled during processing: {}", key);
+        } catch (IOException e) {
+            if (ConnectionExceptions.isClientDisconnect(e)) {
+                logger.debug("Client disconnected during event loop processing: {}", e.getMessage());
+                if (key.attachment() instanceof Channel channel) {
+                    channel.getPipeline().completeLastWriteFuture(e);
+                    channel.close();
+                }
+                return;
+            }
+            logger.error("Error in event loop", e);
+            if (key.attachment() instanceof Channel channel) {
+                channel.getPipeline().completeLastWriteFuture(e);
+                channel.getPipeline().fireExceptionCaught(e);
             }
         } catch (Exception e) {
             logger.error("Error in event loop", e);

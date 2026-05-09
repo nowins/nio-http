@@ -6,6 +6,7 @@ import com.nowin.pipeline.handler.ChannelHandler;
 import com.nowin.transport.TransportSelectionKey;
 import com.nowin.transport.TransportSocketChannel;
 import com.nowin.util.BufferPool;
+import com.nowin.util.ConnectionExceptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -44,9 +45,13 @@ public class HeadHandler implements ChannelHandler {
                 logger.warn("Unsupported message type in HeadHandler: {}", msg.getClass().getName());
             }
         } catch (Exception e) {
-            logger.error("Error writing response", e);
+            if (ConnectionExceptions.isClientDisconnect(e)) {
+                logger.debug("Client disconnected while writing response to {}: {}", safeRemoteAddress(clientChannel), e.getMessage());
+            } else {
+                logger.error("Error writing response", e);
+                ctx.fireExceptionCaught(e);
+            }
             channel.getPipeline().completeLastWriteFuture(e);
-            ctx.fireExceptionCaught(e);
             if (msg instanceof ByteBuffer buffer) {
                 BufferPool.DEFAULT.release(buffer);
             } else if (msg instanceof FileChannelBody body) {
@@ -56,6 +61,14 @@ public class HeadHandler implements ChannelHandler {
                     logger.warn("Error closing FileChannelBody after write failure", ex);
                 }
             }
+        }
+    }
+
+    private Object safeRemoteAddress(TransportSocketChannel clientChannel) {
+        try {
+            return clientChannel != null ? clientChannel.getRemoteAddress() : "unknown";
+        } catch (IOException e) {
+            return "unknown";
         }
     }
 

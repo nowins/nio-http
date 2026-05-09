@@ -13,6 +13,7 @@ import com.nowin.server.HttpServerObserver;
 import com.nowin.server.Router;
 import com.nowin.server.VirtualHost;
 import com.nowin.transport.TransportSelectionKey;
+import com.nowin.util.ConnectionExceptions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -181,7 +182,12 @@ public class HttpServerHandler implements ChannelHandler {
                     logger.error("Error cleaning up request resources", e);
                 }
                 if (!future.isSuccess()) {
-                    logger.error("Error writing response", future.cause());
+                    if (ConnectionExceptions.isClientDisconnect(future.cause())) {
+                        logger.debug("Client disconnected before response write completed: {}",
+                                future.cause() != null ? future.cause().getMessage() : "unknown");
+                    } else {
+                        logger.error("Error writing response", future.cause());
+                    }
                     ctx.close();
                     return;
                 }
