@@ -52,15 +52,19 @@ public class FileChannelBody implements HttpBody {
      * @return the number of bytes written in this call
      */
     public long writeTo(WritableByteChannel target) throws IOException {
+        return writeTo(target, count - transferred);
+    }
+
+    public long writeTo(WritableByteChannel target, long maxBytes) throws IOException {
         if (transferred >= count) {
             return 0;
         }
-        long remaining = count - transferred;
+        long remaining = Math.min(count - transferred, maxBytes);
         long written = fileChannel.transferTo(position + transferred, remaining, target);
         if (written > 0) {
             transferred += written;
         } else if (written == 0) {
-            logger.debug("FileChannel.transferTo returned 0, socket buffer may be full");
+            logger.trace("FileChannel.transferTo returned 0, socket buffer may be full");
         }
         return written;
     }

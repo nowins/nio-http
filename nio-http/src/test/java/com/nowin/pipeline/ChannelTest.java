@@ -1,6 +1,7 @@
 package com.nowin.pipeline;
 
 import com.nowin.core.EventLoop;
+import com.nowin.core.handler.ConnectionLimiter;
 import com.nowin.transport.TransportSelectionKey;
 import com.nowin.transport.TransportSocketChannel;
 import org.junit.jupiter.api.AfterEach;
@@ -11,6 +12,7 @@ import java.net.InetSocketAddress;
 import java.net.SocketOption;
 import java.nio.ByteBuffer;
 import java.util.Queue;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -202,6 +204,28 @@ class ChannelTest {
         channel.removeFromWriteQueue();
 
         assertEquals(0, channel.getPendingWriteBytes(), "Pending bytes should subtract the original queued size");
+    }
+
+    @Test
+    void testCloseOnlyReleasesConnectionOnce() {
+        AtomicInteger decrements = new AtomicInteger();
+        Channel closableChannel = new Channel(null, pipeline, eventLoop);
+        closableChannel.setConnectionLimiter(new ConnectionLimiter() {
+            @Override
+            public boolean incrementConnectionCount() {
+                return true;
+            }
+
+            @Override
+            public void decrementConnectionCount() {
+                decrements.incrementAndGet();
+            }
+        });
+
+        closableChannel.close();
+        closableChannel.close();
+
+        assertEquals(1, decrements.get(), "Channel close should be idempotent");
     }
 
     private static final class TestSocketChannel implements TransportSocketChannel {

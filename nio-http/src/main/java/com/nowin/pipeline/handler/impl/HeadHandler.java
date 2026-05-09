@@ -16,6 +16,7 @@ import java.nio.ByteBuffer;
 public class HeadHandler implements ChannelHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(HeadHandler.class);
+    private static final long MAX_FILE_BYTES_PER_WRITE = 2L * 1024 * 1024;
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
@@ -108,20 +109,19 @@ public class HeadHandler implements ChannelHandler {
     private void writeFileChannelBody(ChannelHandlerContext ctx, com.nowin.pipeline.Channel channel,
                                       TransportSocketChannel clientChannel, FileChannelBody body) throws IOException {
         long totalWritten = 0;
-        while (!body.isComplete()) {
-            long written = body.writeTo(clientChannel);
+        while (!body.isComplete() && totalWritten < MAX_FILE_BYTES_PER_WRITE) {
+            long written = body.writeTo(clientChannel, MAX_FILE_BYTES_PER_WRITE - totalWritten);
             totalWritten += written;
             logger.debug("transferTo wrote {} bytes to {}", written, clientChannel.getRemoteAddress());
             if (written == 0) {
-                // Socket buffer full, queue the body for EventLoop to continue
-                channel.addToWrite(body);
-                logger.debug("FileChannelBody partially transferred ({} remaining), queued for async write", body.remaining());
-
-                TransportSelectionKey key = ctx.getSelectionKey();
-                key.interestOps(key.interestOps() | TransportSelectionKey.OP_WRITE);
-                channel.getEventLoop().wakeup();
+                queueFileBody(ctx, channel, body);
                 return;
             }
+        }
+
+        if (!body.isComplete()) {
+            queueFileBody(ctx, channel, body);
+            return;
         }
 
         if (totalWritten > 0 && channel.getMetricsCollector() != null) {
@@ -133,6 +133,15 @@ public class HeadHandler implements ChannelHandler {
         TransportSelectionKey key = ctx.getSelectionKey();
         key.interestOps(key.interestOps() & ~TransportSelectionKey.OP_WRITE);
         channel.onWriteCompletion();
+    }
+
+    private void queueFileBody(ChannelHandlerContext ctx, com.nowin.pipeline.Channel channel, FileChannelBody body) {
+        channel.addToWrite(body);
+        logger.debug("FileChannelBody partially transferred ({} remaining), queued for async write", body.remaining());
+
+        TransportSelectionKey key = ctx.getSelectionKey();
+        key.interestOps(key.interestOps() | TransportSelectionKey.OP_WRITE);
+        channel.getEventLoop().wakeup();
     }
 
     @Override

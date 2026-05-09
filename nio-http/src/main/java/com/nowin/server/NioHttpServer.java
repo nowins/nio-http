@@ -343,6 +343,6 @@ public class NioHttpServer {
     }
     
     public void decrementConnectionCount() {
-        connectionCount.decrementAndGet();
+        connectionCount.updateAndGet(current -> current > 0 ? current - 1 : 0);
     }
 }

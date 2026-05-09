@@ -47,7 +47,7 @@ public class LoadMonitor {
     }
 
     public void connectionClosed() {
-        activeConnections.decrementAndGet();
+        activeConnections.updateAndGet(current -> current > 0 ? current - 1 : 0);
     }
 
     public void requestProcessed() {

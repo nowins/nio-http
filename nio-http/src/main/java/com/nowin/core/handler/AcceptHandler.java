@@ -53,20 +53,30 @@ public class AcceptHandler implements EventHandler {
 
     @Override
     public void handle(SelectionKey key) {
+        boolean connectionCountIncremented = false;
         try {
             if (connectionLimiter != null && !connectionLimiter.incrementConnectionCount()) {
                 rejectConnection();
                 return;
             }
+            connectionCountIncremented = connectionLimiter != null;
 
             if (loadMonitor != null && loadMonitor.shouldRejectNewConnection()) {
                 rejectConnection();
                 loadMonitor.requestRejected();
+                if (connectionLimiter != null) {
+                    connectionLimiter.decrementConnectionCount();
+                    connectionCountIncremented = false;
+                }
                 return;
             }
 
             TransportSocketChannel clientChannel = serverChannel.accept();
             if (clientChannel == null) {
+                if (connectionLimiter != null) {
+                    connectionLimiter.decrementConnectionCount();
+                    connectionCountIncremented = false;
+                }
                 return;
             }
             clientChannel.configureBlocking(false);
@@ -96,7 +106,7 @@ public class AcceptHandler implements EventHandler {
             }
             logger.debug("Accepted new connection from {}", clientChannel.getRemoteAddress());
         } catch (IOException e) {
-            if (connectionLimiter != null) {
+            if (connectionLimiter != null && connectionCountIncremented) {
                 connectionLimiter.decrementConnectionCount();
             }
             logger.error("Error accepting new connection", e);

@@ -48,6 +48,7 @@ public class Channel {
     private volatile long writeBufferLowWaterMark = DEFAULT_WRITE_BUFFER_LOW_WATER_MARK;
     private volatile long writeBufferHighWaterMark = DEFAULT_WRITE_BUFFER_HIGH_WATER_MARK;
     private volatile long lastReadTime = System.currentTimeMillis();
+    private final java.util.concurrent.atomic.AtomicBoolean closed = new java.util.concurrent.atomic.AtomicBoolean(false);
     private int idleTimeoutMillis = 0;
 
     public Channel(TransportSocketChannel transportSocketChannel, ChannelPipeline pipeline, TransportEventLoop eventLoop) {
@@ -240,6 +241,9 @@ public class Channel {
     }
 
     public void close() {
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
         try {
             if (eventLoop != null) {
                 eventLoop.cancelIdleCheck(this);

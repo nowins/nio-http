@@ -27,6 +27,8 @@ import java.util.concurrent.atomic.AtomicLong;
 public class EventLoop implements TransportEventLoop {
 
     private static final Logger logger = LoggerFactory.getLogger(EventLoop.class);
+    private static final long MAX_BYTES_PER_WRITE_FLUSH = 2L * 1024 * 1024;
+    private static final long MAX_WRITE_FLUSH_NANOS = TimeUnit.MILLISECONDS.toNanos(5);
 
     private final Selector selector;
     private final Thread thread;
@@ -244,7 +246,13 @@ public class EventLoop implements TransportEventLoop {
         Queue<Object> writeQueue = channel.getWriteQueue();
         SocketChannel clientChannel = (SocketChannel) key.channel();
         long totalWritten = 0;
+        long flushDeadline = System.nanoTime() + MAX_WRITE_FLUSH_NANOS;
         while (!writeQueue.isEmpty()) {
+            long remainingBudget = MAX_BYTES_PER_WRITE_FLUSH - totalWritten;
+            if (remainingBudget <= 0 || System.nanoTime() >= flushDeadline) {
+                key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
+                break;
+            }
             Object task = writeQueue.peek();
             if (task instanceof ByteBuffer buffer) {
                 logger.debug("writing remaining byte {} data to {}", buffer.remaining(), clientChannel.getRemoteAddress());
@@ -262,7 +270,7 @@ public class EventLoop implements TransportEventLoop {
                 channel.removeFromWriteQueue(); // all data is written, remove it and update queue size
                 BufferPool.DEFAULT.release(buffer);
             } else if (task instanceof FileChannelBody body) {
-                long written = body.writeTo(clientChannel);
+                long written = body.writeTo(clientChannel, remainingBudget);
                 totalWritten += written;
                 logger.debug("transferTo wrote {} bytes to {}", written, clientChannel.getRemoteAddress());
                 if (body.isComplete()) {
