@@ -4,6 +4,7 @@ import com.nowin.pipeline.Channel;
 import com.nowin.pipeline.ChannelHandlerContext;
 import com.nowin.pipeline.ChannelPipeline;
 import com.nowin.pipeline.handler.ChannelHandler;
+import com.nowin.core.selector.SelectionKeyProcessor;
 import com.nowin.transport.nio.NioSelectionKey;
 import com.nowin.transport.nio.NioSocketChannel;
 import com.nowin.util.BufferPool;
@@ -299,6 +300,20 @@ class EventLoopTest {
                 assertNull(propagatedException.get(), "Cancelled key should not be propagated through the pipeline");
             }
         }
+    }
+
+    @Test
+    void testAcceptKeyDispatchesToSelectionKeyProcessor() throws Exception {
+        AtomicBoolean processed = new AtomicBoolean(false);
+        TestSelectionKey selectionKey = new TestSelectionKey(
+                null,
+                SelectionKey.OP_ACCEPT,
+                SelectionKey.OP_ACCEPT);
+        selectionKey.attach((SelectionKeyProcessor) key -> processed.set(key == selectionKey));
+
+        invokeProcessSelectionKey(selectionKey);
+
+        assertTrue(processed.get(), "Accept event should dispatch through SelectionKeyProcessor");
     }
 
     private void invokeProcessSelectionKey(SelectionKey key) throws Exception {

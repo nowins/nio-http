@@ -1,9 +1,9 @@
-package com.nowin.core.handler;
+package com.nowin.core.selector;
 
 import com.nowin.pipeline.Channel;
 
 /**
- * Connection Limiter
+ * Tracks accepted connections and enforces server-level connection limits.
  */
 public interface ConnectionLimiter {
     /**

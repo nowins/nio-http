@@ -1,6 +1,6 @@
 package com.nowin.pipeline;
 
-import com.nowin.core.handler.ConnectionLimiter;
+import com.nowin.core.selector.ConnectionLimiter;
 import com.nowin.http.FileChannelBody;
 import com.nowin.http.HttpRequest;
 import com.nowin.server.LoadMonitor;

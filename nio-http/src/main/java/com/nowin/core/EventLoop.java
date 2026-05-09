@@ -1,6 +1,6 @@
 package com.nowin.core;
 
-import com.nowin.core.handler.AcceptHandler;
+import com.nowin.core.selector.SelectionKeyProcessor;
 import com.nowin.http.FileChannelBody;
 import com.nowin.pipeline.Channel;
 import com.nowin.transport.TransportChannel;
@@ -208,8 +208,8 @@ public class EventLoop implements TransportEventLoop {
     }
 
     private void handleAccept(SelectionKey key) {
-        AcceptHandler acceptHandler = (AcceptHandler) key.attachment();
-        acceptHandler.handle(key);
+        SelectionKeyProcessor processor = (SelectionKeyProcessor) key.attachment();
+        processor.process(key);
     }
 
     private void handleRead(SelectionKey key) throws IOException {
@@ -453,7 +453,7 @@ public class EventLoop implements TransportEventLoop {
         }
     }
 
-    public java.nio.channels.Selector getSelector() {
+    public Selector getSelector() {
         return selector;
     }
 

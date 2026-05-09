@@ -1,7 +1,7 @@
 package com.nowin.pipeline;
 
 import com.nowin.core.EventLoop;
-import com.nowin.core.handler.ConnectionLimiter;
+import com.nowin.core.selector.ConnectionLimiter;
 import com.nowin.transport.TransportSelectionKey;
 import com.nowin.transport.TransportSocketChannel;
 import org.junit.jupiter.api.AfterEach;

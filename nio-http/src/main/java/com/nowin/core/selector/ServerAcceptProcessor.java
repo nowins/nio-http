@@ -1,12 +1,11 @@
-package com.nowin.core.handler;
+package com.nowin.core.selector;
 
-import com.nowin.core.EventHandler;
 import com.nowin.pipeline.Channel;
 import com.nowin.pipeline.ChannelInitializer;
 import com.nowin.pipeline.ChannelPipeline;
+import com.nowin.server.HttpServerObserver;
 import com.nowin.server.LoadMonitor;
 import com.nowin.server.MetricsCollector;
-import com.nowin.server.HttpServerObserver;
 import com.nowin.server.ServerConfig;
 import com.nowin.transport.TransportEventLoop;
 import com.nowin.transport.TransportEventLoopGroup;
@@ -17,12 +16,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.net.SocketOption;
 import java.net.StandardSocketOptions;
 import java.nio.channels.SelectionKey;
 
-public class AcceptHandler implements EventHandler {
+public class ServerAcceptProcessor implements SelectionKeyProcessor {
 
-    private static final Logger logger = LoggerFactory.getLogger(AcceptHandler.class);
+    private static final Logger logger = LoggerFactory.getLogger(ServerAcceptProcessor.class);
 
     private final TransportEventLoopGroup eventLoopGroup;
     private final ConnectionLimiter connectionLimiter;
@@ -33,14 +33,14 @@ public class AcceptHandler implements EventHandler {
     private final ChannelInitializer channelInitializer;
     private final TransportServerChannel serverChannel;
 
-    public AcceptHandler(TransportEventLoopGroup eventLoopGroup,
-                         ConnectionLimiter connectionLimiter,
-                         ServerConfig config,
-                         LoadMonitor loadMonitor,
-                         MetricsCollector metricsCollector,
-                         HttpServerObserver observer,
-                         ChannelInitializer channelInitializer,
-                         TransportServerChannel serverChannel) {
+    public ServerAcceptProcessor(TransportEventLoopGroup eventLoopGroup,
+                                 ConnectionLimiter connectionLimiter,
+                                 ServerConfig config,
+                                 LoadMonitor loadMonitor,
+                                 MetricsCollector metricsCollector,
+                                 HttpServerObserver observer,
+                                 ChannelInitializer channelInitializer,
+                                 TransportServerChannel serverChannel) {
         this.eventLoopGroup = eventLoopGroup;
         this.connectionLimiter = connectionLimiter;
         this.config = config;
@@ -52,7 +52,7 @@ public class AcceptHandler implements EventHandler {
     }
 
     @Override
-    public void handle(SelectionKey key) {
+    public void process(SelectionKey key) {
         boolean connectionCountIncremented = false;
         try {
             if (connectionLimiter != null && !connectionLimiter.incrementConnectionCount()) {
@@ -93,7 +93,6 @@ public class AcceptHandler implements EventHandler {
             channel.setWriteBufferWaterMarks(config.getWriteBufferLowWaterMark(), config.getWriteBufferHighWaterMark());
             channel.setIdleTimeout(config.getSocketTimeout());
 
-            // Let the initializer assemble the pipeline
             channelInitializer.initChannel(pipeline, channel);
 
             pipeline.setChannel(channel);
@@ -153,15 +152,15 @@ public class AcceptHandler implements EventHandler {
             if (config.isTcpKeepAlive()) {
                 if (config.getTcpKeepIdle() > 0) {
                     Object option = extendedOptionsClass.getField("TCP_KEEPIDLE").get(null);
-                    channel.setOption((java.net.SocketOption<Integer>) option, config.getTcpKeepIdle());
+                    channel.setOption((SocketOption<Integer>) option, config.getTcpKeepIdle());
                 }
                 if (config.getTcpKeepInterval() > 0) {
                     Object option = extendedOptionsClass.getField("TCP_KEEPINTERVAL").get(null);
-                    channel.setOption((java.net.SocketOption<Integer>) option, config.getTcpKeepInterval());
+                    channel.setOption((SocketOption<Integer>) option, config.getTcpKeepInterval());
                 }
                 if (config.getTcpKeepCount() > 0) {
                     Object option = extendedOptionsClass.getField("TCP_KEEPCOUNT").get(null);
-                    channel.setOption((java.net.SocketOption<Integer>) option, config.getTcpKeepCount());
+                    channel.setOption((SocketOption<Integer>) option, config.getTcpKeepCount());
                 }
             }
         } catch (ClassNotFoundException e) {
