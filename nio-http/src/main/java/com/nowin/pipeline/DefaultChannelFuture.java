@@ -27,10 +27,10 @@ public class DefaultChannelFuture implements ChannelFuture {
 
     @Override
     public void addListener(ChannelFutureListener listener) {
+        listeners.add(listener);
         if (isDone()) {
+            listeners.remove(listener);
             notifyListener(listener);
-        } else {
-            listeners.add(listener);
         }
     }
 
@@ -55,16 +55,17 @@ public class DefaultChannelFuture implements ChannelFuture {
     }
 
     public void setSuccess() {
-        isDone.set(true);
+        if (!isDone.compareAndSet(false, true)) {
+            return;
+        }
         notifyListeners();
     }
 
     public void setFailure(Throwable cause) {
-        if (isDone()) {
+        if (!isDone.compareAndSet(false, true)) {
             return;
         }
         this.cause = cause;
-        isDone.set(true);
         notifyListeners();
     }
 
