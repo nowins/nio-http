@@ -218,7 +218,7 @@ public class HttpServerHandler implements ChannelHandler {
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-
+        ctx.fireExceptionCaught(cause);
     }
 
     private VirtualHost findVirtualHost(HttpRequest request) {
