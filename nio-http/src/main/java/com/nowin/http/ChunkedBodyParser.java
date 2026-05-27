@@ -212,30 +212,33 @@ public class ChunkedBodyParser implements BodyParser {
      * Parse the chunk data
      */
     private void parseChunkData(ByteBuffer buffer) throws IOException {
-        // Read exactly currentChunkSize bytes for this chunk
         while (bytesReadInChunk < currentChunkSize && buffer.hasRemaining()) {
-            // Read one byte at a time to ensure we get exactly the right amount
-            byte b = buffer.get();
-            dataStream.write(b);
-            bytesReadInChunk++;
-            totalBytesRead++;
+            long remaining = currentChunkSize - bytesReadInChunk;
+            int toRead = (int) Math.min(remaining, buffer.remaining());
 
-            if (maxBodySize > 0 && totalBytesRead > maxBodySize) {
-                logger.error("Chunked body total size {} exceeds maximum limit of {}", totalBytesRead, maxBodySize);
+            if (maxBodySize > 0 && totalBytesRead + toRead > maxBodySize) {
+                logger.error("Chunked body total size would exceed maximum limit of {}", maxBodySize);
                 state = State.ERROR;
                 cleanupOnError();
                 return;
             }
+
+            if (buffer.hasArray()) {
+                dataStream.write(buffer.array(),
+                        buffer.arrayOffset() + buffer.position(), toRead);
+                buffer.position(buffer.position() + toRead);
+            } else {
+                byte[] data = new byte[toRead];
+                buffer.get(data);
+                dataStream.write(data);
+            }
+
+            bytesReadInChunk += toRead;
+            totalBytesRead += toRead;
         }
 
-        // If we've read all the bytes for this chunk, move to the next state
         if (bytesReadInChunk == currentChunkSize) {
             state = State.CHUNK_END;
-        } else if (bytesReadInChunk > currentChunkSize) {
-            // This shouldn't happen, but if it does, it's an error
-            logger.error("Bytes read in chunk ({}) exceeds chunk size ({})", bytesReadInChunk, currentChunkSize);
-            state = State.ERROR;
-            cleanupOnError();
         }
     }
 

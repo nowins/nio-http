@@ -520,4 +520,57 @@ public class ChunkedBodyParserTest {
         // The body should remain null since populate() should not execute in ERROR state
         assertNull(request.getBody(), "Request body should not be populated when parser is in ERROR state");
     }
+
+    @Test
+    @DisplayName("Test maxBodySize enforcement during chunk data parsing")
+    void testMaxBodySizeExceededDuringChunkData() throws Exception {
+        // Set maxBodySize to 5, but chunk declares 10 bytes
+        ChunkedBodyParser parser = new ChunkedBodyParser(1024, 5);
+        String chunkedData = "A\r\n0123456789\r\n0\r\n\r\n";
+        ByteBuffer buffer = ByteBuffer.wrap(chunkedData.getBytes(StandardCharsets.US_ASCII));
+        Map<String, String> headers = new HashMap<>();
+        headers.put("transfer-encoding", "chunked");
+
+        parser.parse(buffer, headers);
+
+        assertTrue(parser.hasError(), "Parser should error when chunk exceeds maxBodySize");
+        assertEquals(ChunkedBodyParser.State.ERROR, parser.getState());
+    }
+
+    @Test
+    @DisplayName("Test maxBodySize enforcement across multiple chunks")
+    void testMaxBodySizeExceededAcrossMultipleChunks() throws Exception {
+        // maxBodySize=6, first chunk is 4 bytes, second chunk would push past limit
+        ChunkedBodyParser parser = new ChunkedBodyParser(1024, 6);
+        String chunkedData = "4\r\nTest\r\n3\r\n!!!\r\n0\r\n\r\n";
+        ByteBuffer buffer = ByteBuffer.wrap(chunkedData.getBytes(StandardCharsets.US_ASCII));
+        Map<String, String> headers = new HashMap<>();
+        headers.put("transfer-encoding", "chunked");
+
+        parser.parse(buffer, headers);
+
+        assertTrue(parser.hasError(), "Parser should error when cumulative chunks exceed maxBodySize");
+    }
+
+    @Test
+    @DisplayName("Test bulk read handles data spanning multiple parse calls")
+    void testIncrementalParsingWithLargeChunk() throws Exception {
+        ChunkedBodyParser parser = new ChunkedBodyParser(1024);
+
+        // First parse: chunk size line and partial data
+        String part1 = "10\r\n0123456789";
+        ByteBuffer buf1 = ByteBuffer.wrap(part1.getBytes(StandardCharsets.US_ASCII));
+        parser.parse(buf1, new HashMap<>());
+        assertFalse(parser.isComplete());
+
+        // Second parse: remaining data and final chunk
+        String part2 = "ABCDEF\r\n0\r\n\r\n";
+        ByteBuffer buf2 = ByteBuffer.wrap(part2.getBytes(StandardCharsets.US_ASCII));
+        parser.parse(buf2, new HashMap<>());
+
+        assertTrue(parser.isComplete());
+        assertFalse(parser.hasError());
+        assertEquals(16, parser.getTotalBytesRead()); // 0x10 = 16 bytes
+        assertEquals("0123456789ABCDEF", new String(parser.getInMemoryData(), StandardCharsets.US_ASCII));
+    }
 }
