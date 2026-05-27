@@ -66,4 +66,46 @@ public class ParserTest {
         assertNotNull(request);
         assertEquals("HelloWorld", new String(request.getBody(), StandardCharsets.UTF_8));
     }
+
+    @Test
+    void testPipelinedRequestsInSingleBuffer() {
+        HttpRequestParser parser = new HttpRequestParser();
+
+        String rawRequests = "GET /first HTTP/1.1\r\nHost: localhost\r\n\r\n" +
+                "GET /second HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        ByteBuffer buffer = ByteBuffer.wrap(rawRequests.getBytes(StandardCharsets.US_ASCII));
+
+        HttpRequest req1 = parser.parse(buffer);
+        assertNotNull(req1);
+        assertEquals("/first", req1.getUri());
+
+        parser.reset();
+
+        HttpRequest req2 = parser.parse(buffer);
+        assertNotNull(req2);
+        assertEquals("/second", req2.getUri());
+    }
+
+    @Test
+    void testPipelinedRequestsAfterFragmentedRead() {
+        HttpRequestParser parser = new HttpRequestParser();
+
+        // Simulate: first read gets partial request #1 header
+        String part1 = "GET /first HTTP/1.1\r\nHost:";
+        assertNull(parser.parse(ByteBuffer.wrap(part1.getBytes(StandardCharsets.US_ASCII))));
+
+        // Second read completes request #1 AND contains request #2
+        String part2 = " localhost\r\n\r\nGET /second HTTP/1.1\r\nHost: localhost\r\n\r\n";
+        ByteBuffer buffer2 = ByteBuffer.wrap(part2.getBytes(StandardCharsets.US_ASCII));
+        HttpRequest req1 = parser.parse(buffer2);
+        assertNotNull(req1);
+        assertEquals("/first", req1.getUri());
+
+        // After reset, remaining bytes should parse as request #2
+        assertTrue(buffer2.hasRemaining(), "Buffer should have remaining data for pipelined request");
+        parser.reset();
+        HttpRequest req2 = parser.parse(buffer2);
+        assertNotNull(req2);
+        assertEquals("/second", req2.getUri());
+    }
 }

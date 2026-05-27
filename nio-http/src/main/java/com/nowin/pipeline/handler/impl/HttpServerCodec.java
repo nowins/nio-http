@@ -43,11 +43,15 @@ public class HttpServerCodec implements ChannelHandler {
         logger.debug("ChannelRead called for client: {}", remoteAddr);
 
         ByteBuffer buffer = (ByteBuffer) msg;
-        HttpRequest request = null;
         try {
-            if (buffer.hasRemaining()) {
+            if (!buffer.hasRemaining()) {
+                logger.debug("Empty buffer from {}", remoteAddr);
+                return;
+            }
+
+            while (buffer.hasRemaining()) {
                 logger.debug("Processing {} bytes from {}", buffer.remaining(), remoteAddr);
-                request = parser.parse(buffer);
+                HttpRequest request = parser.parse(buffer);
 
                 if (parser.hasError()) {
                     logger.error("Invalid request from {}", remoteAddr);
@@ -56,8 +60,25 @@ public class HttpServerCodec implements ChannelHandler {
                     closeConnection(key);
                     return;
                 }
-            } else {
-                logger.debug("Empty buffer from {}", remoteAddr);
+
+                if (request == null) {
+                    // Incomplete request, need more data
+                    logger.debug("Request incomplete, need more data from {}", remoteAddr);
+                    key.interestOps(key.interestOps() | TransportSelectionKey.OP_READ);
+                    return;
+                }
+
+                // Request parsed, process it
+                logger.info("Request parsed successfully: {} {} from {}", request.getMethod(), request.getUri(), remoteAddr);
+                request.setRemoteAddress(remoteAddr);
+                parser.reset();
+                ctx.setRequest(request);
+                ctx.fireChannelRead(request);
+
+                // Stop if channel was closed during request handling
+                if (!key.isValid()) {
+                    return;
+                }
             }
         } catch (Exception e) {
             logger.error("Error parsing request from {}", remoteAddr, e);
@@ -65,19 +86,6 @@ public class HttpServerCodec implements ChannelHandler {
         } finally {
             BufferPool.DEFAULT.release(buffer);
             ctx.channel().setReadBuffer(null);
-        }
-
-        if (request != null) {
-            // Request is complete, process it
-            logger.info("Request parsed successfully: {} {} from {}", request.getMethod(), request.getUri(), remoteAddr);
-            request.setRemoteAddress(remoteAddr);
-            parser.reset();
-            ctx.setRequest(request);
-            ctx.fireChannelRead(request);
-        } else {
-            // Request incomplete, need more data
-            logger.debug("Request incomplete, need more data from {}", remoteAddr);
-            key.interestOps(key.interestOps() | TransportSelectionKey.OP_READ);
         }
     }
 
