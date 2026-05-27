@@ -16,6 +16,7 @@ import java.io.IOException;
 public class HttpResponse {
     private static final Logger logger = LoggerFactory.getLogger(HttpResponse.class);
     private static final String CRLF = "\r\n";
+    private static final byte[] CRLF_BYTES = "\r\n".getBytes(StandardCharsets.US_ASCII);
     private static final DateTimeFormatter DATE_FORMAT = DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss zzz", Locale.US)
             .withZone(ZoneId.of("GMT"));
     private static final String SERVER_HEADER = "NIO-Http/1.0";
@@ -472,9 +473,9 @@ public class HttpResponse {
             if (chunks != null && !chunks.isEmpty()) {
                 for (byte[] chunk : chunks) {
                     allChunks.add(Integer.toHexString(chunk.length).getBytes(StandardCharsets.UTF_8));
-                    allChunks.add(CRLF.getBytes(StandardCharsets.UTF_8));
+                    allChunks.add(CRLF_BYTES);
                     allChunks.add(chunk);
-                    allChunks.add(CRLF.getBytes(StandardCharsets.UTF_8));
+                    allChunks.add(CRLF_BYTES);
                 }
             }
             // Add body as chunks if available and no explicit chunks
@@ -485,9 +486,9 @@ public class HttpResponse {
                     byte[] chunkData = Arrays.copyOfRange(bodyBytes, i, i + length);
                     
                     allChunks.add(Integer.toHexString(length).getBytes(StandardCharsets.UTF_8));
-                    allChunks.add(CRLF.getBytes(StandardCharsets.UTF_8));
+                    allChunks.add(CRLF_BYTES);
                     allChunks.add(chunkData);
-                    allChunks.add(CRLF.getBytes(StandardCharsets.UTF_8));
+                    allChunks.add(CRLF_BYTES);
                 }
             } else if (httpBody instanceof FileChannelBody) {
                 throw new UnsupportedOperationException("Chunked encoding with FileChannelBody must use streaming write, not toByteBuffer()");
@@ -495,18 +496,18 @@ public class HttpResponse {
 
             // Final chunk
             allChunks.add("0".getBytes(StandardCharsets.UTF_8));
-            allChunks.add(CRLF.getBytes(StandardCharsets.UTF_8));
+            allChunks.add(CRLF_BYTES);
 
             // Add trailers if any
             if (!trailers.isEmpty()) {
                 for (Map.Entry<String, String> entry : trailers.entrySet()) {
                     allChunks.add((entry.getKey() + ": " + entry.getValue()).getBytes(StandardCharsets.UTF_8));
-                    allChunks.add(CRLF.getBytes(StandardCharsets.UTF_8));
+                    allChunks.add(CRLF_BYTES);
                 }
             }
 
             // End of response
-            allChunks.add(CRLF.getBytes(StandardCharsets.UTF_8));
+            allChunks.add(CRLF_BYTES);
 
             // Calculate total size
             int totalSize = allChunks.stream().mapToInt(b -> b.length).sum();
@@ -589,9 +590,9 @@ public class HttpResponse {
 
         List<byte[]> chunkParts = new ArrayList<>();
         chunkParts.add(Integer.toHexString(chunk.length).getBytes(StandardCharsets.UTF_8));
-        chunkParts.add(CRLF.getBytes(StandardCharsets.UTF_8));
+        chunkParts.add(CRLF_BYTES);
         chunkParts.add(chunk);
-        chunkParts.add(CRLF.getBytes(StandardCharsets.UTF_8));
+        chunkParts.add(CRLF_BYTES);
 
         // Calculate total size
         int totalSize = chunkParts.stream().mapToInt(b -> b.length).sum();
@@ -616,18 +617,18 @@ public class HttpResponse {
         List<byte[]> chunkParts = new ArrayList<>();
         // Final chunk
         chunkParts.add("0".getBytes(StandardCharsets.UTF_8));
-        chunkParts.add(CRLF.getBytes(StandardCharsets.UTF_8));
+        chunkParts.add(CRLF_BYTES);
 
         // Add trailers if any
         if (!trailers.isEmpty()) {
             for (Map.Entry<String, String> entry : trailers.entrySet()) {
                 chunkParts.add((entry.getKey() + ": " + entry.getValue()).getBytes(StandardCharsets.UTF_8));
-                chunkParts.add(CRLF.getBytes(StandardCharsets.UTF_8));
+                chunkParts.add(CRLF_BYTES);
             }
         }
 
         // End of response
-        chunkParts.add(CRLF.getBytes(StandardCharsets.UTF_8));
+        chunkParts.add(CRLF_BYTES);
 
         // Calculate total size
         int totalSize = chunkParts.stream().mapToInt(b -> b.length).sum();
