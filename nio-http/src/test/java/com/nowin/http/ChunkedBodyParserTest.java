@@ -234,15 +234,15 @@ public class ChunkedBodyParserTest {
     }
 
     /**
-     * Test that Content-Length is ignored when Transfer-Encoding: chunked is present
-     * According to RFC 7230, when both are present, Transfer-Encoding takes precedence
+     * Test that both Transfer-Encoding: chunked and Content-Length are rejected
+     * per RFC 7230 section 3.3.3 to prevent request smuggling.
      */
     @Test
     void testChunkedWithContentLength() throws Exception {
         String chunkedRequest = "POST /both-headers HTTP/1.1\r\n" +
                 "Host: localhost\r\n" +
                 "Transfer-Encoding: chunked\r\n" +
-                "Content-Length: 100\r\n" + // This should be ignored
+                "Content-Length: 100\r\n" +
                 "Content-Type: text/plain\r\n" +
                 "\r\n" +
                 "5\r\n" +
@@ -254,8 +254,8 @@ public class ChunkedBodyParserTest {
         ByteBuffer buffer = ByteBuffer.wrap(chunkedRequest.getBytes(StandardCharsets.US_ASCII));
 
         HttpRequest request = parser.parse(buffer);
-        assertNotNull(request);
-        assertEquals("Hello", new String(request.getBody(), StandardCharsets.UTF_8));
+        assertNull(request, "Request with both Transfer-Encoding and Content-Length should be rejected");
+        assertTrue(parser.hasError(), "Parser should be in error state");
     }
 
     /**

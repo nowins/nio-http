@@ -189,6 +189,14 @@ public class HttpRequestParser {
         
         // Check if request uses chunked transfer encoding
         boolean isChunked = transferEncoding != null && transferEncoding.toLowerCase().contains("chunked");
+
+        // Reject requests with both Transfer-Encoding and Content-Length (RFC 7230 sec 3.3.3)
+        if (isChunked && contentLengthStr != null && !"0".equals(contentLengthStr)) {
+            logger.error("Request contains both Transfer-Encoding: chunked and Content-Length: {} — "
+                    + "rejecting to prevent request smuggling", contentLengthStr);
+            state = ParseState.ERROR;
+            return false;
+        }
         
         long sizeThreshold = BodyParserFactory.getDefaultSizeThreshold();
 
