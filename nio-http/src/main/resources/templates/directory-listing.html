@@ -233,7 +233,7 @@
     </div>
 
     <script>
-        const currentPath = "{{path}}";
+        const currentPath = "{{pathJs}}";
         let modalMode = '';
         let modalTarget = '';
 
@@ -267,7 +267,7 @@
         async function deleteItem(name) {
             if (!confirm('Are you sure you want to delete "' + name + '"?')) return;
             try {
-                const res = await fetch(currentPath + (currentPath.endsWith('/') ? '' : '/') + name, { method: 'DELETE' });
+                const res = await fetch(currentPath + (currentPath.endsWith('/') ? '' : '/') + encodeURIComponent(name), { method: 'DELETE' });
                 if (res.ok) {
                     location.reload();
                 } else {
@@ -308,7 +308,7 @@
             hideModal();
             if (modalMode === 'mkdir') {
                 try {
-                    const res = await fetch(currentPath + (currentPath.endsWith('/') ? '' : '/') + name, { method: 'MKCOL' });
+                    const res = await fetch(currentPath + (currentPath.endsWith('/') ? '' : '/') + encodeURIComponent(name), { method: 'MKCOL' });
                     if (res.ok) {
                         location.reload();
                     } else {
@@ -319,8 +319,8 @@
                 }
             } else if (modalMode === 'rename') {
                 const newName = name;
-                const oldUrl = currentPath + (currentPath.endsWith('/') ? '' : '/') + modalTarget;
-                const newUrl = currentPath + (currentPath.endsWith('/') ? '' : '/') + newName;
+                const oldUrl = currentPath + (currentPath.endsWith('/') ? '' : '/') + encodeURIComponent(modalTarget);
+                const newUrl = currentPath + (currentPath.endsWith('/') ? '' : '/') + encodeURIComponent(newName);
                 try {
                     const res = await fetch(oldUrl, {
                         method: 'MOVE',

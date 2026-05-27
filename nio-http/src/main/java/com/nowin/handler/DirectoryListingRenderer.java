@@ -3,6 +3,8 @@ package com.nowin.handler;
 import com.nowin.template.SimpleTemplateEngine;
 
 import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
@@ -30,6 +32,7 @@ public class DirectoryListingRenderer {
     public String render(Path directoryPath, String requestUri) throws IOException {
         Map<String, String> vars = new HashMap<>();
         vars.put("path", escapeHtml(requestUri));
+        vars.put("pathJs", escapeJsString(requestUri));
         vars.put("breadcrumb", buildBreadcrumb(requestUri));
 
         StringBuilder rows = new StringBuilder();
@@ -43,7 +46,7 @@ public class DirectoryListingRenderer {
             if (lastSlash >= 0) {
                 parentUri = parentUri.substring(0, lastSlash + 1);
             }
-            rows.append("<tr><td><a href=\"").append(escapeHtml(parentUri)).append("\">..</a></td>")
+            rows.append("<tr><td><a href=\"").append(escapeHtml(encodeUriPath(parentUri))).append("\">..</a></td>")
                 .append("<td class=\"size\">-</td><td>-</td><td class=\"actions\"></td></tr>");
         }
 
@@ -63,7 +66,7 @@ public class DirectoryListingRenderer {
 
             String icon = isDir ? "📁" : "📄";
             String escapedName = escapeHtml(entryName);
-            String escapedUri = escapeHtml(entryUri);
+            String escapedUri = escapeHtml(encodeUriPath(entryUri));
             String jsName = escapeJsString(entryName);
 
             rows.append("<tr>")
@@ -84,6 +87,29 @@ public class DirectoryListingRenderer {
 
         vars.put("rows", rows.toString());
         return templateEngine.render(vars);
+    }
+
+    /**
+     * Percent-encode characters that are unsafe in a URI path, such as # (fragment)
+     * and non-ASCII characters. Each path segment is encoded separately so that
+     * the path separator / is preserved.
+     */
+    static String encodeUriPath(String path) {
+        StringBuilder result = new StringBuilder(path.length() * 2);
+        int segmentStart = 0;
+        for (int i = 0; i <= path.length(); i++) {
+            if (i == path.length() || path.charAt(i) == '/') {
+                if (i > segmentStart) {
+                    result.append(URLEncoder.encode(path.substring(segmentStart, i),
+                            StandardCharsets.UTF_8).replace("+", "%20"));
+                }
+                if (i < path.length()) {
+                    result.append('/');
+                }
+                segmentStart = i + 1;
+            }
+        }
+        return result.toString();
     }
 
     private static String buildBreadcrumb(String requestUri) {
@@ -114,7 +140,7 @@ public class DirectoryListingRenderer {
             String escapedSegment = escapeHtml(segment + "/");
             if (i < segments.length - 1) {
                 breadcrumb.append("<span class=\"sep\"> </span>")
-                          .append("<a href=\"").append(escapeHtml(accumulated.toString())).append("\">")
+                          .append("<a href=\"").append(escapeHtml(encodeUriPath(accumulated.toString()))).append("\">")
                           .append(escapedSegment).append("</a>");
             } else {
                 // Current directory - no link
