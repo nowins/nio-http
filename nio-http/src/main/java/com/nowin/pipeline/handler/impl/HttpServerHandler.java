@@ -109,9 +109,6 @@ public class HttpServerHandler implements ChannelHandler {
             logger.warn("No handler found for request: {} {}", request.getMethod(), request.getUri());
             Throwable cause = failureCause != null ? failureCause : new ResourceNotFoundException();
             observer.onRequestFailure(request, response, cause, responseTime);
-            if (ctx != null && !routeError) {
-                ctx.fireExceptionCaught(cause);
-            }
             writeResponse(ctx, request, response);
             return;
         }
