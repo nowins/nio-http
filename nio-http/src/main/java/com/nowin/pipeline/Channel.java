@@ -38,8 +38,6 @@ public class Channel {
     private final Queue<Object> writeQueue = new ConcurrentLinkedQueue<>();
     private final AtomicInteger writeQueueSize = new AtomicInteger(0);
     private final java.util.concurrent.atomic.AtomicLong pendingWriteBytes = new java.util.concurrent.atomic.AtomicLong(0);
-    private final java.util.Map<Object, Long> pendingWriteSizes =
-            java.util.Collections.synchronizedMap(new java.util.IdentityHashMap<>());
     private ConnectionLimiter connectionLimiter;
     private LoadMonitor loadMonitor;
     private MetricsCollector metricsCollector;
@@ -184,7 +182,6 @@ public class Channel {
         writeQueue.add(task);
         writeQueueSize.incrementAndGet();
         long bytes = estimatePendingBytes(task);
-        pendingWriteSizes.put(task, bytes);
         long pendingBytes = pendingWriteBytes.addAndGet(bytes);
         if (pendingBytes >= writeBufferHighWaterMark) {
             updateReadInterest(false);
@@ -199,8 +196,7 @@ public class Channel {
         Object task = writeQueue.poll();
         if (task != null) {
             writeQueueSize.decrementAndGet();
-            Long queuedBytes = pendingWriteSizes.remove(task);
-            long bytes = queuedBytes != null ? queuedBytes : estimatePendingBytes(task);
+            long bytes = estimatePendingBytes(task);
             long pendingBytes = pendingWriteBytes.addAndGet(-bytes);
             if (pendingBytes <= writeBufferLowWaterMark) {
                 updateReadInterest(true);
@@ -268,8 +264,6 @@ public class Channel {
             writeQueue.clear();
             writeQueueSize.set(0);
             pendingWriteBytes.set(0);
-            pendingWriteSizes.clear();
-            
             // close selection key
             if (selectionKey != null && selectionKey.isValid()) {
                 selectionKey.cancel();

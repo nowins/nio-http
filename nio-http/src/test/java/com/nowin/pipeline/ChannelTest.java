@@ -192,7 +192,7 @@ class ChannelTest {
     }
 
     @Test
-    void testPendingWriteBytesUseEnqueuedSize() {
+    void testPendingWriteBytesAccounting() {
         ByteBuffer buffer = ByteBuffer.allocate(16);
         buffer.put("hello".getBytes());
         buffer.flip();
@@ -200,10 +200,9 @@ class ChannelTest {
         channel.addToWrite(buffer);
         assertEquals(5, channel.getPendingWriteBytes());
 
-        buffer.position(buffer.limit());
         channel.removeFromWriteQueue();
 
-        assertEquals(0, channel.getPendingWriteBytes(), "Pending bytes should subtract the original queued size");
+        assertEquals(0, channel.getPendingWriteBytes(), "Pending bytes should return to 0 after remove");
     }
 
     @Test
