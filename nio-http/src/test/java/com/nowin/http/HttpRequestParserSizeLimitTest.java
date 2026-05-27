@@ -90,6 +90,22 @@ public class HttpRequestParserSizeLimitTest {
     }
 
     @Test
+    void testNegativeContentLength() {
+        HttpRequestParser parser = new HttpRequestParser(65536, 1024 * 1024);
+
+        String rawRequest = "POST /upload HTTP/1.1\r\n" +
+                "Host: localhost\r\n" +
+                "Content-Length: -1\r\n" +
+                "Content-Type: text/plain\r\n" +
+                "\r\n";
+
+        ByteBuffer buffer = ByteBuffer.wrap(rawRequest.getBytes(StandardCharsets.US_ASCII));
+        HttpRequest request = parser.parse(buffer);
+        assertNull(request);
+        assertTrue(parser.hasError(), "Parser should reject negative Content-Length");
+    }
+
+    @Test
     void testResetClearsHeaderByteCounter() {
         HttpRequestParser parser = new HttpRequestParser(50, 1024 * 1024);
 

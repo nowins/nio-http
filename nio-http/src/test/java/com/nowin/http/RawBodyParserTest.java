@@ -151,6 +151,13 @@ public class RawBodyParserTest {
     }
 
     @Test
+    void testNegativeContentLengthThrows() {
+        assertThrows(IllegalArgumentException.class, () -> {
+            new RawBodyParser(-1, 1024);
+        });
+    }
+
+    @Test
     void testHasErrorWhenIOExceptionOccurs() throws IOException {
         // Create parser with smaller content length than actual data in single buffer
         RawBodyParser parser = new RawBodyParser(2, 1024); // Expect only 2 bytes

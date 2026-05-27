@@ -208,6 +208,11 @@ public class HttpRequestParser {
                 state = ParseState.ERROR;
                 return false;
             }
+            if (contentLength < 0) {
+                logger.error("Invalid Content-Length: {}", contentLengthStr);
+                state = ParseState.ERROR;
+                return false;
+            }
             if (maxBodySize > 0 && contentLength > maxBodySize) {
                 logger.error("Content-Length {} exceeds maximum body size {}", contentLength, maxBodySize);
                 state = ParseState.ERROR;

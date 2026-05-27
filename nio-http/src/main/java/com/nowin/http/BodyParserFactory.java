@@ -40,7 +40,7 @@ public class BodyParserFactory {
     }
 
     public static BodyParser createRawBodyParser(long contentLength, long sizeThreshold, long maxBodySize) {
-        return new RawBodyParser(contentLength, sizeThreshold);
+        return new RawBodyParser(contentLength, sizeThreshold, maxBodySize);
     }
     
     public static long getDefaultSizeThreshold() {

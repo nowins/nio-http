@@ -16,6 +16,7 @@ public class RawBodyParser implements BodyParser {
 
     private final long contentLength;
     private final long sizeThreshold;
+    private final long maxBodySize;
     private long bytesRead = 0;
     private State state = State.INITIAL;
 
@@ -25,8 +26,20 @@ public class RawBodyParser implements BodyParser {
     private IOException error;
 
     public RawBodyParser(long contentLength, long sizeThreshold) {
+        this(contentLength, sizeThreshold, Long.MAX_VALUE);
+    }
+
+    public RawBodyParser(long contentLength, long sizeThreshold, long maxBodySize) {
+        if (contentLength < 0) {
+            throw new IllegalArgumentException("Content-Length cannot be negative: " + contentLength);
+        }
+        if (maxBodySize > 0 && contentLength > maxBodySize) {
+            throw new IllegalArgumentException(
+                    "Content-Length " + contentLength + " exceeds max body size " + maxBodySize);
+        }
         this.contentLength = contentLength;
         this.sizeThreshold = sizeThreshold;
+        this.maxBodySize = maxBodySize;
 
         if (contentLength <= sizeThreshold) {
             this.dataStream = new ByteArrayOutputStream((int) contentLength);
