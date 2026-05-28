@@ -22,6 +22,22 @@ public class HttpResponse {
     private static final String SERVER_HEADER = "NIO-Http/1.0";
     private static final int DEFAULT_CHUNK_SIZE = 4096;
 
+    private static final Map<String, String> CANONICAL_HEADERS = Map.ofEntries(
+            Map.entry("content-length", "Content-Length"),
+            Map.entry("content-type", "Content-Type"),
+            Map.entry("content-encoding", "Content-Encoding"),
+            Map.entry("content-range", "Content-Range"),
+            Map.entry("transfer-encoding", "Transfer-Encoding"),
+            Map.entry("connection", "Connection"),
+            Map.entry("server", "Server"),
+            Map.entry("date", "Date"),
+            Map.entry("content-disposition", "Content-Disposition"),
+            Map.entry("accept", "Accept"),
+            Map.entry("accept-encoding", "Accept-Encoding"),
+            Map.entry("range", "Range"),
+            Map.entry("vary", "Vary")
+    );
+
     private int statusCode = 200;
     private String statusMessage = "OK";
     private String protocolVersion = "HTTP/1.1";
@@ -412,12 +428,8 @@ public class HttpResponse {
      * @return a ByteBuffer containing the full response
      */
     public ByteBuffer toByteBuffer() {
-        // HTTP/1.0 doesn't support chunked encoding
-        boolean useChunkedEncoding = chunkedEncoding && !protocolVersion.equalsIgnoreCase("HTTP/1.0");
-        
-        // For HTTP/1.0, combine all chunks into body if chunked encoding is disabled
+        // HTTP/1.0: combine explicit chunks into a single body
         if (protocolVersion.equalsIgnoreCase("HTTP/1.0") && chunkedEncoding && chunks != null && !chunks.isEmpty()) {
-            // Combine chunks into body
             int totalLength = chunks.stream().mapToInt(chunk -> chunk.length).sum();
             byte[] combinedBody = new byte[totalLength];
             int position = 0;
@@ -427,175 +439,99 @@ public class HttpResponse {
             }
             this.httpBody = new ByteArrayBody(combinedBody);
         }
-        
-        // Ensure headers are correct for the protocol version
+
+        // HTTP/1.0 does not support chunked encoding
         if (protocolVersion.equalsIgnoreCase("HTTP/1.0")) {
-            // Force disable chunked encoding for HTTP/1.0
             this.chunkedEncoding = false;
-            
-            // Remove any Transfer-Encoding header for HTTP/1.0 (case-insensitive)
             headers.entrySet().removeIf(entry -> entry.getKey().equalsIgnoreCase("transfer-encoding"));
-            
-            // Calculate total body length
-            long totalBodyLength = httpBody != null ? httpBody.contentLength() : 0;
-            
-            // Set Content-Length header (override any existing, unless body not allowed)
-            if (isBodyAllowed()) {
-                setHeader("Content-Length", String.valueOf(totalBodyLength));
-            }
         }
-        
-        // Refresh Date header to reflect actual response time
+
+        // HTTP/1.0 must have Content-Length
+        if (protocolVersion.equalsIgnoreCase("HTTP/1.0") && isBodyAllowed()) {
+            long totalBodyLength = httpBody != null ? httpBody.contentLength() : 0;
+            setHeader("Content-Length", String.valueOf(totalBodyLength));
+        }
+
         setHeader("Date", DATE_FORMAT.format(Instant.now()));
 
-        StringBuilder headersBuffer = new StringBuilder();
+        byte[] headersBytes = serializeHeaders();
+        boolean useChunkedEncoding = chunkedEncoding && !protocolVersion.equalsIgnoreCase("HTTP/1.0");
+        return useChunkedEncoding ? assembleChunkedResponse(headersBytes) : assembleRegularResponse(headersBytes);
+    }
 
-        // Status line - use the protocol version from the request
-        headersBuffer.append(protocolVersion).append(" ").append(statusCode).append(" ").append(statusMessage).append(CRLF);
-
-        // Headers - use proper case for standard headers
+    private byte[] serializeHeaders() {
+        StringBuilder sb = new StringBuilder();
+        sb.append(protocolVersion).append(" ").append(statusCode).append(" ").append(statusMessage).append(CRLF);
         for (Map.Entry<String, String> entry : headers.entrySet()) {
-            String headerName = entry.getKey();
-            // Convert standard headers to proper case
-            if (headerName.equalsIgnoreCase("content-length")) {
-                headerName = "Content-Length";
-            } else if (headerName.equalsIgnoreCase("content-type")) {
-                headerName = "Content-Type";
-            } else if (headerName.equalsIgnoreCase("content-encoding")) {
-                headerName = "Content-Encoding";
-            } else if (headerName.equalsIgnoreCase("content-range")) {
-                headerName = "Content-Range";
-            } else if (headerName.equalsIgnoreCase("transfer-encoding")) {
-                headerName = "Transfer-Encoding";
-            } else if (headerName.equalsIgnoreCase("connection")) {
-                headerName = "Connection";
-            } else if (headerName.equalsIgnoreCase("server")) {
-                headerName = "Server";
-            } else if (headerName.equalsIgnoreCase("date")) {
-                headerName = "Date";
-            } else if (headerName.equalsIgnoreCase("content-disposition")) {
-                headerName = "Content-Disposition";
-            } else if (headerName.equalsIgnoreCase("accept")) {
-                headerName = "Accept";
-            } else if (headerName.equalsIgnoreCase("accept-encoding")) {
-                headerName = "Accept-Encoding";
-            } else if (headerName.equalsIgnoreCase("range")) {
-                headerName = "Range";
-            } else if (headerName.equalsIgnoreCase("vary")) {
-                headerName = "Vary";
+            String name = CANONICAL_HEADERS.getOrDefault(entry.getKey().toLowerCase(), entry.getKey());
+            sb.append(name).append(": ").append(entry.getValue()).append(CRLF);
+        }
+        sb.append(CRLF);
+        return sb.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    private ByteBuffer assembleChunkedResponse(byte[] headersBytes) {
+        List<byte[]> allChunks = new ArrayList<>();
+        allChunks.add(headersBytes);
+
+        if (chunks != null && !chunks.isEmpty()) {
+            for (byte[] chunk : chunks) {
+                allChunks.add(Integer.toHexString(chunk.length).getBytes(StandardCharsets.UTF_8));
+                allChunks.add(CRLF_BYTES);
+                allChunks.add(chunk);
+                allChunks.add(CRLF_BYTES);
             }
-            headersBuffer.append(headerName).append(": ").append(entry.getValue()).append(CRLF);
+        } else if (httpBody instanceof ByteArrayBody bab && bab.contentLength() > 0) {
+            byte[] bodyBytes = bab.data();
+            for (int i = 0; i < bodyBytes.length; i += chunkSize) {
+                int length = Math.min(chunkSize, bodyBytes.length - i);
+                byte[] chunkData = Arrays.copyOfRange(bodyBytes, i, i + length);
+                allChunks.add(Integer.toHexString(length).getBytes(StandardCharsets.UTF_8));
+                allChunks.add(CRLF_BYTES);
+                allChunks.add(chunkData);
+                allChunks.add(CRLF_BYTES);
+            }
+        } else if (httpBody instanceof FileChannelBody) {
+            throw new UnsupportedOperationException("Chunked encoding with FileChannelBody must use streaming write, not toByteBuffer()");
         }
 
-        // End of headers
-        headersBuffer.append(CRLF);
+        allChunks.add("0".getBytes(StandardCharsets.UTF_8));
+        allChunks.add(CRLF_BYTES);
 
-        // Convert headers to bytes
-        byte[] headersBytes = headersBuffer.toString().getBytes(StandardCharsets.UTF_8);
-
-        if (useChunkedEncoding) {
-            // Handle chunked encoding
-            List<byte[]> allChunks = new ArrayList<>();
-            allChunks.add(headersBytes);
-
-            // Add explicit chunks if available
-            if (chunks != null && !chunks.isEmpty()) {
-                for (byte[] chunk : chunks) {
-                    allChunks.add(Integer.toHexString(chunk.length).getBytes(StandardCharsets.UTF_8));
-                    allChunks.add(CRLF_BYTES);
-                    allChunks.add(chunk);
-                    allChunks.add(CRLF_BYTES);
-                }
+        if (!trailers.isEmpty()) {
+            for (Map.Entry<String, String> entry : trailers.entrySet()) {
+                allChunks.add((entry.getKey() + ": " + entry.getValue()).getBytes(StandardCharsets.UTF_8));
+                allChunks.add(CRLF_BYTES);
             }
-            // Add body as chunks if available and no explicit chunks
-            else if (httpBody instanceof ByteArrayBody bab && bab.contentLength() > 0) {
-                byte[] bodyBytes = bab.data();
-                for (int i = 0; i < bodyBytes.length; i += chunkSize) {
-                    int length = Math.min(chunkSize, bodyBytes.length - i);
-                    byte[] chunkData = Arrays.copyOfRange(bodyBytes, i, i + length);
-                    
-                    allChunks.add(Integer.toHexString(length).getBytes(StandardCharsets.UTF_8));
-                    allChunks.add(CRLF_BYTES);
-                    allChunks.add(chunkData);
-                    allChunks.add(CRLF_BYTES);
-                }
-            } else if (httpBody instanceof FileChannelBody) {
-                throw new UnsupportedOperationException("Chunked encoding with FileChannelBody must use streaming write, not toByteBuffer()");
-            }
+        }
 
-            // Final chunk
-            allChunks.add("0".getBytes(StandardCharsets.UTF_8));
-            allChunks.add(CRLF_BYTES);
+        allChunks.add(CRLF_BYTES);
 
-            // Add trailers if any
-            if (!trailers.isEmpty()) {
-                for (Map.Entry<String, String> entry : trailers.entrySet()) {
-                    allChunks.add((entry.getKey() + ": " + entry.getValue()).getBytes(StandardCharsets.UTF_8));
-                    allChunks.add(CRLF_BYTES);
-                }
-            }
+        int totalSize = allChunks.stream().mapToInt(b -> b.length).sum();
+        ByteBuffer buffer = allocateResponseBuffer(totalSize);
+        for (byte[] chunk : allChunks) {
+            buffer.put(chunk);
+        }
+        buffer.flip();
+        return buffer;
+    }
 
-            // End of response
-            allChunks.add(CRLF_BYTES);
-
-            // Calculate total size
-            int totalSize = allChunks.stream().mapToInt(b -> b.length).sum();
-            ByteBuffer buffer = allocateResponseBuffer(totalSize);
-            for (byte[] chunk : allChunks) {
-                buffer.put(chunk);
-            }
-            buffer.flip();
-            return buffer;
-        } else {
-            // Regular response - ensure we have Content-Length for HTTP/1.0 (unless body not allowed)
-            if (isBodyAllowed() && protocolVersion.equalsIgnoreCase("HTTP/1.0") && !headers.containsKey("content-length")) {
-                setHeader("Content-Length", String.valueOf(httpBody != null ? httpBody.contentLength() : 0));
-                // Reconstruct headers with Content-Length
-                headersBuffer = new StringBuilder();
-                headersBuffer.append(protocolVersion).append(" ").append(statusCode).append(" ").append(statusMessage).append(CRLF);
-                for (Map.Entry<String, String> entry : headers.entrySet()) {
-                    String headerName = entry.getKey();
-                    // Convert standard headers to proper case
-                    if (headerName.equalsIgnoreCase("content-length")) {
-                        headerName = "Content-Length";
-                    } else if (headerName.equalsIgnoreCase("content-type")) {
-                        headerName = "Content-Type";
-                    } else if (headerName.equalsIgnoreCase("content-encoding")) {
-                        headerName = "Content-Encoding";
-                    } else if (headerName.equalsIgnoreCase("transfer-encoding")) {
-                        headerName = "Transfer-Encoding";
-                    } else if (headerName.equalsIgnoreCase("connection")) {
-                        headerName = "Connection";
-                    } else if (headerName.equalsIgnoreCase("server")) {
-                        headerName = "Server";
-                    } else if (headerName.equalsIgnoreCase("date")) {
-                        headerName = "Date";
-                    } else if (headerName.equalsIgnoreCase("content-disposition")) {
-                        headerName = "Content-Disposition";
-                    }
-                    headersBuffer.append(headerName).append(": ").append(entry.getValue()).append(CRLF);
-                }
-                headersBuffer.append(CRLF);
-                headersBytes = headersBuffer.toString().getBytes(StandardCharsets.UTF_8);
-            }
-            
-            if (httpBody instanceof FileChannelBody) {
-                // For zero-copy bodies, only return the headers; body is sent separately
-                ByteBuffer buffer = allocateResponseBuffer(headersBytes.length);
-                buffer.put(headersBytes);
-                buffer.flip();
-                return buffer;
-            }
-            int bodyLength = httpBody instanceof ByteArrayBody bab ? bab.data().length : 0;
-            int totalSize = headersBytes.length + bodyLength;
-            ByteBuffer buffer = allocateResponseBuffer(totalSize);
+    private ByteBuffer assembleRegularResponse(byte[] headersBytes) {
+        if (httpBody instanceof FileChannelBody) {
+            ByteBuffer buffer = allocateResponseBuffer(headersBytes.length);
             buffer.put(headersBytes);
-            if (httpBody instanceof ByteArrayBody bab) {
-                buffer.put(bab.data());
-            }
             buffer.flip();
             return buffer;
         }
+        int bodyLength = httpBody instanceof ByteArrayBody bab ? bab.data().length : 0;
+        int totalSize = headersBytes.length + bodyLength;
+        ByteBuffer buffer = allocateResponseBuffer(totalSize);
+        buffer.put(headersBytes);
+        if (httpBody instanceof ByteArrayBody bab) {
+            buffer.put(bab.data());
+        }
+        buffer.flip();
+        return buffer;
     }
 
     private static ByteBuffer allocateResponseBuffer(int totalSize) {
