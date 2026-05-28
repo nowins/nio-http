@@ -88,17 +88,6 @@ public class ChunkedBodyParser implements BodyParser {
             }
         }
 
-        // If we've processed all available data and haven't completed,
-        // check if we're at the final state after last chunk
-        if (state == State.LAST_CHUNK_END && !buffer.hasRemaining()) {
-            // If we're waiting for trailers and no more data is available,
-            // consider the parsing complete
-            if (currentChunkSize == 0) {
-                state = State.COMPLETE;
-                finish();
-            }
-        }
-        
         // If we're in error state, clean up resources
         if (state == State.ERROR) {
             cleanupOnError();

@@ -148,4 +148,29 @@ public class ParserTest {
         assertNotNull(request, "POST with body should be allowed");
         assertEquals("Hello", new String(request.getBody(), StandardCharsets.UTF_8));
     }
+
+    @Test
+    void testObsFoldHeaderLineIsRejected() {
+        // RFC 7230 Section 3.2.4: obs-fold (obsolete line folding) is not supported
+        String raw = "GET /api HTTP/1.1\r\nHost: localhost\r\n" +
+                " obs-fold-value\r\n" +
+                "\r\n";
+        HttpRequestParser parser = new HttpRequestParser();
+        ByteBuffer buffer = ByteBuffer.wrap(raw.getBytes(StandardCharsets.US_ASCII));
+        HttpRequest request = parser.parse(buffer);
+        assertNull(request, "Request with obs-fold header should be rejected");
+        assertTrue(parser.hasError(), "Parser should be in error state for obs-fold");
+    }
+
+    @Test
+    void testObsFoldWithTabIsRejected() {
+        String raw = "GET /api HTTP/1.1\r\nHost: localhost\r\n" +
+                "\tobs-fold-value\r\n" +
+                "\r\n";
+        HttpRequestParser parser = new HttpRequestParser();
+        ByteBuffer buffer = ByteBuffer.wrap(raw.getBytes(StandardCharsets.US_ASCII));
+        HttpRequest request = parser.parse(buffer);
+        assertNull(request, "Request with tab-indented obs-fold should be rejected");
+        assertTrue(parser.hasError());
+    }
 }

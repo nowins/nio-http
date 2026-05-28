@@ -115,6 +115,12 @@ public class HttpRequestParser {
             if (headerLine.isEmpty()) {
                 return true; // read end of headers
             }
+            // RFC 7230 Section 3.2.4: obs-fold (obsolete line folding) is not supported
+            if (headerLine.charAt(0) == ' ' || headerLine.charAt(0) == '\t') {
+                logger.error("Obsolete line folding (obs-fold) is not supported per RFC 7230: line starts with whitespace");
+                state = ParseState.ERROR;
+                return false;
+            }
             int colonIndex = headerLine.indexOf(':');
             if (colonIndex == -1) {
                 logger.error("Invalid header line, missing colon: {}", headerLine);

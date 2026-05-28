@@ -573,4 +573,31 @@ public class ChunkedBodyParserTest {
         assertEquals(16, parser.getTotalBytesRead()); // 0x10 = 16 bytes
         assertEquals("0123456789ABCDEF", new String(parser.getInMemoryData(), StandardCharsets.US_ASCII));
     }
+
+    @Test
+    @DisplayName("Test parser requires final CRLF after last chunk")
+    void testFinalCrlfRequiredAfterLastChunk() throws Exception {
+        ChunkedBodyParser parser = new ChunkedBodyParser(1024);
+        Map<String, String> headers = new HashMap<>();
+        headers.put("transfer-encoding", "chunked");
+
+        // Feed chunked data ending at "0\r\n" without the final CRLF
+        String partial = "4\r\nTest\r\n0\r\n";
+        ByteBuffer buf1 = ByteBuffer.wrap(partial.getBytes(StandardCharsets.US_ASCII));
+        parser.parse(buf1, headers);
+
+        // Parser must NOT auto-complete — final CRLF is required per RFC 7230
+        assertFalse(parser.isComplete(), "Parser should not complete without final CRLF");
+        assertFalse(parser.hasError());
+        assertEquals(ChunkedBodyParser.State.LAST_CHUNK_END, parser.getState());
+
+        // Feed the final CRLF
+        String finalCrlf = "\r\n";
+        ByteBuffer buf2 = ByteBuffer.wrap(finalCrlf.getBytes(StandardCharsets.US_ASCII));
+        parser.parse(buf2, headers);
+
+        assertTrue(parser.isComplete(), "Parser should complete after receiving final CRLF");
+        assertFalse(parser.hasError());
+        assertEquals("Test", new String(parser.getInMemoryData(), StandardCharsets.US_ASCII));
+    }
 }
