@@ -96,6 +96,7 @@ public class ServerAcceptProcessor implements SelectionKeyProcessor {
             channelInitializer.initChannel(pipeline, channel);
 
             pipeline.setChannel(channel);
+            pipeline.fireChannelActive();
             eventLoop.register(clientChannel, TransportSelectionKey.OP_READ, channel);
             if (connectionLimiter != null) {
                 connectionLimiter.onChannelOpened(channel);

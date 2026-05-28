@@ -240,6 +240,7 @@ public class Channel {
         if (!closed.compareAndSet(false, true)) {
             return;
         }
+        pipeline.fireChannelInactive();
         try {
             if (eventLoop != null) {
                 eventLoop.cancelIdleCheck(this);

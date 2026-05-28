@@ -8,10 +8,13 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import com.nowin.pipeline.handler.ChannelHandler;
+
 import java.net.InetSocketAddress;
 import java.net.SocketOption;
 import java.nio.ByteBuffer;
 import java.util.Queue;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -225,6 +228,32 @@ class ChannelTest {
         closableChannel.close();
 
         assertEquals(1, decrements.get(), "Channel close should be idempotent");
+    }
+
+    @Test
+    void testCloseFiresChannelInactive() {
+        AtomicBoolean inactive = new AtomicBoolean(false);
+        pipeline.addLast("lifecycle", new ChannelHandler() {
+            @Override
+            public void channelInactive(ChannelHandlerContext ctx) {
+                inactive.set(true);
+            }
+        });
+        channel.close();
+        assertTrue(inactive.get(), "channelInactive should fire on close");
+    }
+
+    @Test
+    void testCloseFiresChannelInactiveBeforeCleanup() {
+        AtomicBoolean inactiveFired = new AtomicBoolean(false);
+        pipeline.addLast("lifecycle", new ChannelHandler() {
+            @Override
+            public void channelInactive(ChannelHandlerContext ctx) {
+                inactiveFired.set(true);
+            }
+        });
+        channel.close();
+        assertTrue(inactiveFired.get());
     }
 
     private static final class TestSocketChannel implements TransportSocketChannel {

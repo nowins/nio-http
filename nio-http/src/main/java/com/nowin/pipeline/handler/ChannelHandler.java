@@ -21,4 +21,10 @@ public interface ChannelHandler {
 
     default void handlerRemoved(ChannelHandlerContext ctx) {
     }
+
+    default void channelActive(ChannelHandlerContext ctx) {
+    }
+
+    default void channelInactive(ChannelHandlerContext ctx) {
+    }
 }

@@ -6,6 +6,8 @@ import com.nowin.pipeline.handler.impl.TailHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.NoSuchElementException;
+
 public class ChannelPipeline {
 
     private static final Logger logger = LoggerFactory.getLogger(ChannelPipeline.class);
@@ -83,5 +85,69 @@ public class ChannelPipeline {
 
     public Channel channel() {
         return channel;
+    }
+
+    public ChannelPipeline remove(String name) {
+        ChannelHandlerContext ctx = findContext(name);
+        if (ctx == null) {
+            throw new NoSuchElementException("Handler not found: " + name);
+        }
+        if (ctx == head || ctx == tail) {
+            throw new IllegalArgumentException("Cannot remove head or tail handler");
+        }
+        ctx.getPrev().setNext(ctx.getNext());
+        ctx.getNext().setPrev(ctx.getPrev());
+        ctx.getHandler().handlerRemoved(ctx);
+        return this;
+    }
+
+    public ChannelPipeline replace(String name, ChannelHandler newHandler) {
+        ChannelHandlerContext oldCtx = findContext(name);
+        if (oldCtx == null) {
+            throw new NoSuchElementException("Handler not found: " + name);
+        }
+        if (oldCtx == head || oldCtx == tail) {
+            throw new IllegalArgumentException("Cannot replace head or tail handler");
+        }
+        ChannelHandlerContext newCtx = new ChannelHandlerContext(name, this, newHandler);
+        oldCtx.getPrev().setNext(newCtx);
+        newCtx.setPrev(oldCtx.getPrev());
+        newCtx.setNext(oldCtx.getNext());
+        oldCtx.getNext().setPrev(newCtx);
+        oldCtx.getHandler().handlerRemoved(oldCtx);
+        newHandler.handlerAdded(newCtx);
+        return this;
+    }
+
+    public ChannelHandler get(String name) {
+        ChannelHandlerContext ctx = findContext(name);
+        return ctx != null ? ctx.getHandler() : null;
+    }
+
+    private ChannelHandlerContext findContext(String name) {
+        ChannelHandlerContext current = head;
+        while (current != null) {
+            if (current.getName().equals(name)) {
+                return current;
+            }
+            current = current.getNext();
+        }
+        return null;
+    }
+
+    public void fireChannelActive() {
+        ChannelHandlerContext current = head;
+        while (current != null) {
+            current.getHandler().channelActive(current);
+            current = current.getNext();
+        }
+    }
+
+    public void fireChannelInactive() {
+        ChannelHandlerContext current = head;
+        while (current != null) {
+            current.getHandler().channelInactive(current);
+            current = current.getNext();
+        }
     }
 }
