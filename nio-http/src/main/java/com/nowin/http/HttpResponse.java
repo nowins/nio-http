@@ -46,7 +46,6 @@ public class HttpResponse {
     private HttpBody httpBody;
     private List<byte[]> chunks;
     private boolean chunkedEncoding = false;
-    private boolean gzipCompression = false;
     private boolean headersWritten = false;
     private int chunkSize = DEFAULT_CHUNK_SIZE;
 
@@ -231,83 +230,71 @@ public class HttpResponse {
         }
     }
 
-    public boolean isGzipCompression() {
-        return gzipCompression;
-    }
-
-    public void setGzipCompression(boolean gzipCompression) {
-        this.gzipCompression = gzipCompression;
-    }
-
     public void enableCompressionIfSupported(HttpRequest request) {
-        if (chunkedEncoding && chunks != null && !chunks.isEmpty()) {
-            // Cannot compress already chunked explicit chunks
-            return;
-        }
-        if (httpBody == null || httpBody.contentLength() == 0 || httpBody.contentLength() < 512) {
-            return; // Skip empty or very small bodies
-        }
-        if (!(httpBody instanceof ByteArrayBody)) {
-            return; // Only compress in-memory bodies
-        }
+        if (chunkedEncoding && chunks != null && !chunks.isEmpty()) return;
+        if (httpBody == null || httpBody.contentLength() == 0 || httpBody.contentLength() < 512) return;
+        if (!(httpBody instanceof ByteArrayBody)) return;
+
         String contentType = getHeader("Content-Type");
-        if (contentType != null) {
-            String baseType = contentType.split(";")[0].trim().toLowerCase();
-            // Skip already compressed or non-compressible formats
-            if (baseType.startsWith("image/") || baseType.startsWith("video/") || baseType.startsWith("audio/")
-                    || baseType.equals("application/gzip") || baseType.equals("application/zip")
-                    || baseType.equals("application/pdf") || baseType.equals("application/x-7z-compressed")) {
-                return;
-            }
-        }
-        if (!request.getHeader("Accept-Encoding").isPresent()) {
-            return;
-        }
+        if (contentType != null && !isCompressibleContentType(contentType)) return;
+        if (!request.getHeader("Accept-Encoding").isPresent()) return;
+
         String acceptEncoding = request.getHeader("Accept-Encoding").get();
         boolean compressed = false;
 
-            // Try gzip first if supported
-            if (!compressed && acceptEncoding.contains("gzip") && !gzipCompression) {
-                try {
-                    ByteArrayOutputStream byteOut = new ByteArrayOutputStream();
-                    byte[] bodyBytes = ((ByteArrayBody) httpBody).data();
-                    try (GZIPOutputStream gzipOut = new GZIPOutputStream(byteOut)) {
-                        gzipOut.write(bodyBytes);
-                    }
-                    this.httpBody = new ByteArrayBody(byteOut.toByteArray());
-                    this.gzipCompression = true;
-                    setHeader("Content-Encoding", "gzip");
-                    compressed = true;
-                } catch (IOException e) {
-                    logger.warn("Failed to compress response body with gzip", e);
-                    this.gzipCompression = false;
+        if (acceptEncoding.contains("gzip")) {
+            compressed = tryCompress("gzip", byteOut -> {
+                try (GZIPOutputStream gzip = new GZIPOutputStream(byteOut)) {
+                    gzip.write(getBody());
                 }
-            }
+            });
+        }
 
-            // Try deflate if gzip failed or not supported
-            if (!compressed && acceptEncoding.contains("deflate") && !gzipCompression) {
-                try {
-                    ByteArrayOutputStream byteOut = new ByteArrayOutputStream();
-                    byte[] bodyBytes = ((ByteArrayBody) httpBody).data();
-                    try (java.util.zip.DeflaterOutputStream deflateOut = new java.util.zip.DeflaterOutputStream(byteOut)) {
-                        deflateOut.write(bodyBytes);
-                    }
-                    this.httpBody = new ByteArrayBody(byteOut.toByteArray());
-                    setHeader("Content-Encoding", "deflate");
-                    compressed = true;
-                } catch (IOException e) {
-                    logger.warn("Failed to compress response body with deflate", e);
+        if (!compressed && acceptEncoding.contains("deflate")) {
+            compressed = tryCompress("deflate", byteOut -> {
+                try (java.util.zip.DeflaterOutputStream deflate = new java.util.zip.DeflaterOutputStream(byteOut)) {
+                    deflate.write(getBody());
                 }
-            }
+            });
+        }
 
-            // Update content length if not using chunked encoding
-            if (isBodyAllowed() && compressed && !chunkedEncoding && httpBody != null) {
-                setHeader("Content-Length", String.valueOf(httpBody.contentLength()));
-            }
-            
-            // Add Vary: Accept-Encoding for caching purposes
+        if (compressed && isBodyAllowed() && !chunkedEncoding && httpBody != null) {
+            setHeader("Content-Length", String.valueOf(httpBody.contentLength()));
+        }
+
+        if (compressed) {
             setHeader("Vary", "Accept-Encoding");
         }
+    }
+
+    @FunctionalInterface
+    private interface CompressAction {
+        void compress(ByteArrayOutputStream out) throws IOException;
+    }
+
+    private boolean tryCompress(String encoding, CompressAction action) {
+        try {
+            ByteArrayOutputStream byteOut = new ByteArrayOutputStream();
+            action.compress(byteOut);
+            setBody(new ByteArrayBody(byteOut.toByteArray()));
+            setHeader("Content-Encoding", encoding);
+            return true;
+        } catch (IOException e) {
+            logger.warn("Failed to compress response body with {}", encoding, e);
+            return false;
+        }
+    }
+
+    private static boolean isCompressibleContentType(String contentType) {
+        String baseType = contentType.split(";")[0].trim().toLowerCase();
+        return !baseType.startsWith("image/")
+                && !baseType.startsWith("video/")
+                && !baseType.startsWith("audio/")
+                && !baseType.equals("application/gzip")
+                && !baseType.equals("application/zip")
+                && !baseType.equals("application/pdf")
+                && !baseType.equals("application/x-7z-compressed");
+    }
 
     /**
      * Adds a single chunk to the response.
