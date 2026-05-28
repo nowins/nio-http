@@ -2,6 +2,8 @@ package com.nowin.pipeline;
 
 import com.nowin.http.HttpRequest;
 import com.nowin.pipeline.handler.ChannelHandler;
+import com.nowin.pipeline.handler.ChannelInboundHandler;
+import com.nowin.pipeline.handler.ChannelOutboundHandler;
 import com.nowin.transport.TransportSelectionKey;
 import com.nowin.transport.TransportSocketChannel;
 import org.slf4j.Logger;
@@ -64,14 +66,26 @@ public class ChannelHandlerContext {
     }
 
     public void fireChannelRead(Object msg) {
-        if (next != null) {
-            next.handler.channelRead(next, msg);
+        ChannelHandlerContext n = next;
+        while (n != null) {
+            ChannelHandler h = n.handler;
+            if (!(h instanceof ChannelOutboundHandler) || h instanceof ChannelInboundHandler) {
+                h.channelRead(n, msg);
+                return;
+            }
+            n = n.next;
         }
     }
 
     public void fireChannelWrite(Object msg) {
-        if (prev != null) {
-            prev.handler.channelWrite(prev, msg);
+        ChannelHandlerContext p = prev;
+        while (p != null) {
+            ChannelHandler h = p.handler;
+            if (!(h instanceof ChannelInboundHandler) || h instanceof ChannelOutboundHandler) {
+                h.channelWrite(p, msg);
+                return;
+            }
+            p = p.prev;
         }
     }
 
