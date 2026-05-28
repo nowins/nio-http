@@ -57,7 +57,7 @@ public class HttpServerCodec implements ChannelHandler {
                     logger.error("Invalid request from {}", remoteAddr);
                     parser.reset();
                     ctx.fireExceptionCaught(new IOException("Invalid request"));
-                    closeConnection(key);
+                    ctx.close();
                     return;
                 }
 
@@ -82,7 +82,7 @@ public class HttpServerCodec implements ChannelHandler {
             }
         } catch (Exception e) {
             logger.error("Error parsing request from {}", remoteAddr, e);
-            closeConnection(key);
+            ctx.close();
         } finally {
             BufferPool.DEFAULT.release(buffer);
             ctx.channel().setReadBuffer(null);
@@ -98,28 +98,5 @@ public class HttpServerCodec implements ChannelHandler {
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
         logger.error("Exception caught in HttpServerCodec", cause);
         ctx.fireExceptionCaught(cause);
-    }
-
-    private void closeConnection(TransportSelectionKey key) {
-        TransportSocketChannel clientChannel = (TransportSocketChannel) key.channel();
-        String remoteAddr = "unknown";
-        try {
-            if (clientChannel != null) {
-                remoteAddr = clientChannel.getRemoteAddress().toString();
-            }
-        } catch (IOException e) {
-            logger.error("Error getting remote address", e);
-        }
-        
-        try {
-            logger.debug("Closing connection: {}", remoteAddr);
-            key.cancel();
-            if (clientChannel != null) {
-                clientChannel.close();
-            }
-            logger.debug("Connection closed: {}", remoteAddr);
-        } catch (IOException e) {
-            logger.error("Error closing connection: {}", remoteAddr, e);
-        }
     }
 }

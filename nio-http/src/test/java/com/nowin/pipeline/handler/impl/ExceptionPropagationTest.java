@@ -4,10 +4,12 @@ import com.nowin.pipeline.Channel;
 import com.nowin.pipeline.ChannelHandlerContext;
 import com.nowin.pipeline.ChannelPipeline;
 import com.nowin.pipeline.handler.ChannelHandler;
+import com.nowin.http.HttpRequestParser;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -96,5 +98,53 @@ public class ExceptionPropagationTest {
         public void close() {
             isClosed = true;
         }
+    }
+
+    @Test
+    void testCodecClosesChannelOnParseError() {
+        ChannelPipeline pipeline = new ChannelPipeline();
+        final boolean[] codecExceptionCaught = {false};
+
+        pipeline.addLast("codec", new HttpServerCodec());
+        pipeline.addLast("catcher", new ChannelHandler() {
+            @Override
+            public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+                codecExceptionCaught[0] = true;
+            }
+        });
+
+        TestChannel channel = new TestChannel();
+        pipeline.setChannel(channel);
+
+        // GET with Content-Length > 0 — triggers parse error in setupBodyParser
+        String invalidRequest = "GET /api HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\n";
+        channel.setReadBuffer(ByteBuffer.wrap(invalidRequest.getBytes(StandardCharsets.US_ASCII)));
+        pipeline.fireChannelRead(null);
+
+        assertTrue(codecExceptionCaught[0], "Exception should be caught by downstream handler");
+        assertTrue(channel.isClosed, "Channel should be closed via ctx.close() on parse error");
+    }
+
+    @Test
+    void testCodecClosesChannelOnParsingException() {
+        ChannelPipeline pipeline = new ChannelPipeline();
+
+        pipeline.addLast("codec", new HttpServerCodec());
+        pipeline.addLast("catcher", new ChannelHandler() {
+            @Override
+            public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+                // Swallow — let codec's catch block handle close
+            }
+        });
+
+        TestChannel channel = new TestChannel();
+        pipeline.setChannel(channel);
+
+        // Malformed request that triggers the catch block
+        String badRequest = "INVALID\r\n\r\n";
+        channel.setReadBuffer(ByteBuffer.wrap(badRequest.getBytes(StandardCharsets.US_ASCII)));
+        pipeline.fireChannelRead(null);
+
+        assertTrue(channel.isClosed, "Channel should be closed via ctx.close() on parsing exception");
     }
 }
