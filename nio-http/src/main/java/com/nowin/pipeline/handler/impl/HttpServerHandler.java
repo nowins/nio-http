@@ -220,13 +220,33 @@ public class HttpServerHandler implements ChannelHandler {
 
     private VirtualHost findVirtualHost(HttpRequest request) {
         String hostHeader = request.getHeader("Host").orElse("");
-        String hostName = hostHeader.split(":")[0]; // Remove port
+        String hostName = extractHostName(hostHeader);
 
         if (!hostName.isEmpty() && virtualHosts.containsKey(hostName)) {
             return virtualHosts.get(hostName);
         }
 
         return defaultVirtualHost;
+    }
+
+    static String extractHostName(String hostHeader) {
+        if (hostHeader == null || hostHeader.isEmpty()) {
+            return "";
+        }
+        // IPv6 address: [::1]:8080 or [2001:db8::1]
+        if (hostHeader.startsWith("[")) {
+            int closingBracket = hostHeader.indexOf(']');
+            if (closingBracket > 0) {
+                return hostHeader.substring(1, closingBracket);
+            }
+            return hostHeader.substring(1); // malformed, return everything after '['
+        }
+        // IPv4 or hostname with optional port: host:port
+        int colonIndex = hostHeader.indexOf(':');
+        if (colonIndex > 0) {
+            return hostHeader.substring(0, colonIndex);
+        }
+        return hostHeader;
     }
 
     private void handleTraceRequest(HttpRequest request, HttpResponse response) {

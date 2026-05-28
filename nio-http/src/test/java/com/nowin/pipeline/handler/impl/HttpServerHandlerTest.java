@@ -64,6 +64,28 @@ public class HttpServerHandlerTest {
                 "TailHandler should close channel when exception reaches it via HttpServerHandler forwarding");
     }
 
+    @Test
+    void testExtractHostNameIpv4() {
+        assertEquals("localhost", HttpServerHandler.extractHostName("localhost"));
+        assertEquals("localhost", HttpServerHandler.extractHostName("localhost:8080"));
+        assertEquals("example.com", HttpServerHandler.extractHostName("example.com:443"));
+    }
+
+    @Test
+    void testExtractHostNameIpv6() {
+        assertEquals("::1", HttpServerHandler.extractHostName("[::1]"));
+        assertEquals("::1", HttpServerHandler.extractHostName("[::1]:8080"));
+        assertEquals("2001:db8::1", HttpServerHandler.extractHostName("[2001:db8::1]"));
+        assertEquals("2001:db8::1", HttpServerHandler.extractHostName("[2001:db8::1]:443"));
+    }
+
+    @Test
+    void testExtractHostNameNoPort() {
+        assertEquals("", HttpServerHandler.extractHostName(""));
+        assertEquals("", HttpServerHandler.extractHostName(null));
+        assertEquals("host", HttpServerHandler.extractHostName("host"));
+    }
+
     static class TestChannel extends Channel {
         boolean isClosed = false;
 
