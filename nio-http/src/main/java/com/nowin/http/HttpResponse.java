@@ -45,7 +45,6 @@ public class HttpResponse {
 
     public void setStatusCode(int statusCode) {
         this.statusCode = statusCode;
-        // Set default status message based on common status codes
         this.statusMessage = switch (statusCode) {
             case 200 -> "OK";
             case 201 -> "Created";
@@ -59,6 +58,19 @@ public class HttpResponse {
             case 416 -> "Requested Range Not Satisfiable";
             default -> "";
         };
+
+        // 204 and 304 MUST NOT include a body per RFC 7230
+        if (!isBodyAllowed()) {
+            headers.remove("content-length");
+            headers.remove("transfer-encoding");
+            closeOldBody();
+            this.httpBody = null;
+            this.chunkedEncoding = false;
+        }
+    }
+
+    private boolean isBodyAllowed() {
+        return statusCode >= 200 && statusCode != 204 && statusCode != 304;
     }
 
     public String getStatusMessage() {
@@ -99,8 +111,8 @@ public class HttpResponse {
             // Force disable chunked encoding for HTTP/1.0
             setChunkedEncoding(false);
             
-            // Ensure Content-Length is set for HTTP/1.0
-            if (!headers.containsKey("content-length")) {
+            // Ensure Content-Length is set for HTTP/1.0 (unless body is not allowed)
+            if (isBodyAllowed() && !headers.containsKey("content-length")) {
                 setHeader("Content-Length", String.valueOf(httpBody != null ? httpBody.contentLength() : 0));
             }
         }
@@ -120,7 +132,7 @@ public class HttpResponse {
     public void setBody(HttpBody body) {
         closeOldBody();
         this.httpBody = body;
-        if (!chunkedEncoding && httpBody != null) {
+        if (isBodyAllowed() && !chunkedEncoding && httpBody != null) {
             setHeader("Content-Length", String.valueOf(httpBody.contentLength()));
         }
     }
@@ -133,7 +145,7 @@ public class HttpResponse {
         closeOldBody();
         byte[] bytes = body.getBytes(charset);
         this.httpBody = new ByteArrayBody(bytes);
-        if (!chunkedEncoding) {
+        if (isBodyAllowed() && !chunkedEncoding) {
             setHeader("Content-Length", String.valueOf(bytes.length));
         }
     }
@@ -158,7 +170,7 @@ public class HttpResponse {
         closeOldBody();
         byte[] bytes = body != null ? body.clone() : new byte[0];
         this.httpBody = new ByteArrayBody(bytes);
-        if (!chunkedEncoding) {
+        if (isBodyAllowed() && !chunkedEncoding) {
             setHeader("Content-Length", String.valueOf(bytes.length));
         }
     }
@@ -186,8 +198,9 @@ public class HttpResponse {
         } else {
             this.chunks = null;
             headers.remove("Transfer-Encoding");
-            // Always set Content-Length, even if body is null
-            setHeader("Content-Length", String.valueOf(httpBody != null ? httpBody.contentLength() : 0));
+            if (isBodyAllowed()) {
+                setHeader("Content-Length", String.valueOf(httpBody != null ? httpBody.contentLength() : 0));
+            }
         }
     }
 
@@ -261,7 +274,7 @@ public class HttpResponse {
             }
 
             // Update content length if not using chunked encoding
-            if (compressed && !chunkedEncoding && httpBody != null) {
+            if (isBodyAllowed() && compressed && !chunkedEncoding && httpBody != null) {
                 setHeader("Content-Length", String.valueOf(httpBody.contentLength()));
             }
             
@@ -415,8 +428,10 @@ public class HttpResponse {
             // Calculate total body length
             long totalBodyLength = httpBody != null ? httpBody.contentLength() : 0;
             
-            // Set Content-Length header (override any existing)
-            setHeader("Content-Length", String.valueOf(totalBodyLength));
+            // Set Content-Length header (override any existing, unless body not allowed)
+            if (isBodyAllowed()) {
+                setHeader("Content-Length", String.valueOf(totalBodyLength));
+            }
         }
         
         StringBuilder headersBuffer = new StringBuilder();
@@ -518,8 +533,8 @@ public class HttpResponse {
             buffer.flip();
             return buffer;
         } else {
-            // Regular response - ensure we have Content-Length for HTTP/1.0
-            if (protocolVersion.equalsIgnoreCase("HTTP/1.0") && !headers.containsKey("content-length")) {
+            // Regular response - ensure we have Content-Length for HTTP/1.0 (unless body not allowed)
+            if (isBodyAllowed() && protocolVersion.equalsIgnoreCase("HTTP/1.0") && !headers.containsKey("content-length")) {
                 setHeader("Content-Length", String.valueOf(httpBody != null ? httpBody.contentLength() : 0));
                 // Reconstruct headers with Content-Length
                 headersBuffer = new StringBuilder();

@@ -463,5 +463,55 @@ class HttpResponseTest {
         assertFalse(responseStr.contains("X-Custom-Trailer: trailer-value"));
         assertTrue(responseStr.contains("Content-Length"));
     }
+
+    @Test
+    void test204NoContentMustNotIncludeContentLength() {
+        response.setStatusCode(204);
+        ByteBuffer buffer = response.toByteBuffer();
+        String responseStr = StandardCharsets.UTF_8.decode(buffer).toString();
+        assertFalse(responseStr.toLowerCase().contains("content-length"), "204 MUST NOT include Content-Length");
+        assertFalse(responseStr.toLowerCase().contains("transfer-encoding"), "204 MUST NOT include Transfer-Encoding");
+    }
+
+    @Test
+    void test304NotModifiedMustNotIncludeContentLength() {
+        response.setStatusCode(304);
+        response.setBody("should be cleared");
+        ByteBuffer buffer = response.toByteBuffer();
+        String responseStr = StandardCharsets.UTF_8.decode(buffer).toString();
+        assertFalse(responseStr.toLowerCase().contains("content-length"), "304 MUST NOT include Content-Length");
+    }
+
+    @Test
+    void testSetting204StatusCodeClearsBody() {
+        response.setBody("Hello");
+        assertEquals(200, response.getStatusCode());
+        assertNotNull(response.getHttpBody());
+
+        response.setStatusCode(204);
+        ByteBuffer buffer = response.toByteBuffer();
+        String responseStr = StandardCharsets.UTF_8.decode(buffer).toString();
+        assertFalse(responseStr.toLowerCase().contains("content-length"));
+        // No body should be present in output
+        assertNull(response.getHttpBody());
+    }
+
+    @Test
+    void test204Http10DoesNotForceContentLength() {
+        response.setStatusCode(204);
+        response.setProtocolVersion("HTTP/1.0");
+        ByteBuffer buffer = response.toByteBuffer();
+        String responseStr = StandardCharsets.UTF_8.decode(buffer).toString();
+        assertFalse(responseStr.toLowerCase().contains("content-length"), "HTTP/1.0 204 MUST NOT include Content-Length");
+    }
+
+    @Test
+    void test200ResponseStillHasContentLength() {
+        response.setStatusCode(200);
+        response.setBody("OK");
+        ByteBuffer buffer = response.toByteBuffer();
+        String responseStr = StandardCharsets.UTF_8.decode(buffer).toString();
+        assertTrue(responseStr.contains("Content-Length: 2"), "200 response should have Content-Length");
+    }
 }
 
