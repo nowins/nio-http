@@ -232,7 +232,7 @@ public class Channel {
     public void onWriteCompletion() {
         if (writeQueue.isEmpty()) {
             logger.debug("write completed");
-            pipeline.completeLastWriteFuture(null);
+            pipeline.completePendingWriteFutures(null);
         }
     }
 

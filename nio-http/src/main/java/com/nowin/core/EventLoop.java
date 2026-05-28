@@ -188,20 +188,20 @@ public class EventLoop implements TransportEventLoop {
             if (ConnectionExceptions.isClientDisconnect(e)) {
                 logger.debug("Client disconnected during event loop processing: {}", e.getMessage());
                 if (key.attachment() instanceof Channel channel) {
-                    channel.getPipeline().completeLastWriteFuture(e);
+                    channel.getPipeline().completePendingWriteFutures(e);
                     channel.close();
                 }
                 return;
             }
             logger.error("Error in event loop", e);
             if (key.attachment() instanceof Channel channel) {
-                channel.getPipeline().completeLastWriteFuture(e);
+                channel.getPipeline().completePendingWriteFutures(e);
                 channel.getPipeline().fireExceptionCaught(e);
             }
         } catch (Exception e) {
             logger.error("Error in event loop", e);
             if (key.attachment() instanceof Channel channel) {
-                channel.getPipeline().completeLastWriteFuture(e);
+                channel.getPipeline().completePendingWriteFutures(e);
                 channel.getPipeline().fireExceptionCaught(e);
             }
         }

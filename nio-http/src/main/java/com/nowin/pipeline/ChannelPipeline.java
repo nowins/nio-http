@@ -7,6 +7,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.NoSuchElementException;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class ChannelPipeline {
 
@@ -15,7 +17,7 @@ public class ChannelPipeline {
     private Channel channel;
     private final ChannelHandlerContext head;
     private final ChannelHandlerContext tail;
-    private DefaultChannelFuture lastWriteFuture;
+    private final Queue<DefaultChannelFuture> writeFutures = new ConcurrentLinkedQueue<>();
 
     public ChannelPipeline() {
         head = new ChannelHandlerContext("head", this, new HeadHandler());
@@ -66,19 +68,21 @@ public class ChannelPipeline {
     }
 
     public ChannelFuture write(Object msg) {
-        lastWriteFuture = new DefaultChannelFuture(channel);
+        DefaultChannelFuture future = new DefaultChannelFuture(channel);
+        writeFutures.add(future);
         tail.fireChannelWrite(msg);
-        return lastWriteFuture;
+        return future;
     }
 
-    public void completeLastWriteFuture(Throwable cause) {
-        if (lastWriteFuture != null) {
+    public void completePendingWriteFutures(Throwable cause) {
+        DefaultChannelFuture future;
+        while ((future = writeFutures.poll()) != null) {
             if (cause != null) {
                 logger.debug("write failed");
-                lastWriteFuture.setFailure(cause);
+                future.setFailure(cause);
             } else {
                 logger.debug("write success");
-                lastWriteFuture.setSuccess();
+                future.setSuccess();
             }
         }
     }

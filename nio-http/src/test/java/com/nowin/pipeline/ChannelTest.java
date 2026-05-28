@@ -231,6 +231,62 @@ class ChannelTest {
     }
 
     @Test
+    void testWriteReturnsDistinctFutures() {
+        TestSelectionKey key = new TestSelectionKey(TransportSelectionKey.OP_READ | TransportSelectionKey.OP_WRITE);
+        Channel writeChannel = new Channel(new TestSocketChannel(key), new ChannelPipeline(), eventLoop);
+        ChannelPipeline pipe = writeChannel.getPipeline();
+        pipe.setChannel(writeChannel);
+
+        ChannelFuture future1 = pipe.write(ByteBuffer.allocate(8));
+        ChannelFuture future2 = pipe.write(ByteBuffer.allocate(8));
+
+        assertNotSame(future1, future2);
+        assertTrue(future1.isSuccess());
+        assertTrue(future2.isSuccess());
+    }
+
+    @Test
+    void testCompletePendingWriteFuturesDrainsAll() {
+        TestSelectionKey key = new TestSelectionKey(TransportSelectionKey.OP_READ | TransportSelectionKey.OP_WRITE);
+        Channel writeChannel = new Channel(new WriteBlockedSocketChannel(key), new ChannelPipeline(), eventLoop);
+        ChannelPipeline pipe = writeChannel.getPipeline();
+        pipe.setChannel(writeChannel);
+
+        ChannelFuture future1 = pipe.write(ByteBuffer.allocate(8));
+        ChannelFuture future2 = pipe.write(ByteBuffer.allocate(8));
+
+        // Both should be pending because writes are blocked
+        assertFalse(future1.isDone());
+        assertFalse(future2.isDone());
+
+        pipe.completePendingWriteFutures(null);
+
+        assertTrue(future1.isSuccess());
+        assertTrue(future2.isSuccess());
+    }
+
+    @Test
+    void testCompletePendingWriteFuturesWithError() {
+        TestSelectionKey key = new TestSelectionKey(TransportSelectionKey.OP_READ | TransportSelectionKey.OP_WRITE);
+        Channel writeChannel = new Channel(new WriteBlockedSocketChannel(key), new ChannelPipeline(), eventLoop);
+        ChannelPipeline pipe = writeChannel.getPipeline();
+        pipe.setChannel(writeChannel);
+
+        ChannelFuture future1 = pipe.write(ByteBuffer.allocate(8));
+        ChannelFuture future2 = pipe.write(ByteBuffer.allocate(8));
+
+        RuntimeException error = new RuntimeException("write error");
+        pipe.completePendingWriteFutures(error);
+
+        assertTrue(future1.isDone());
+        assertFalse(future1.isSuccess());
+        assertSame(error, future1.cause());
+        assertTrue(future2.isDone());
+        assertFalse(future2.isSuccess());
+        assertSame(error, future2.cause());
+    }
+
+    @Test
     void testCloseFiresChannelInactive() {
         AtomicBoolean inactive = new AtomicBoolean(false);
         pipeline.addLast("lifecycle", new ChannelHandler() {
@@ -278,6 +334,61 @@ class ChannelTest {
             int remaining = src.remaining();
             src.position(src.limit());
             return remaining;
+        }
+
+        @Override
+        public boolean isOpen() {
+            return true;
+        }
+
+        @Override
+        public void close() {
+        }
+
+        @Override
+        public InetSocketAddress getRemoteAddress() {
+            return new InetSocketAddress("127.0.0.1", 0);
+        }
+
+        @Override
+        public InetSocketAddress getLocalAddress() {
+            return new InetSocketAddress("127.0.0.1", 0);
+        }
+
+        @Override
+        public <T> void setOption(SocketOption<T> option, T value) {
+        }
+
+        @Override
+        public <T> T getOption(SocketOption<T> option) {
+            return null;
+        }
+
+        @Override
+        public void configureBlocking(boolean block) {
+        }
+    }
+
+    private static final class WriteBlockedSocketChannel implements TransportSocketChannel {
+        private final TransportSelectionKey selectionKey;
+
+        private WriteBlockedSocketChannel(TransportSelectionKey selectionKey) {
+            this.selectionKey = selectionKey;
+        }
+
+        @Override
+        public TransportSelectionKey selectionKey() {
+            return selectionKey;
+        }
+
+        @Override
+        public int read(ByteBuffer dst) {
+            return 0;
+        }
+
+        @Override
+        public int write(ByteBuffer src) {
+            return 0;
         }
 
         @Override

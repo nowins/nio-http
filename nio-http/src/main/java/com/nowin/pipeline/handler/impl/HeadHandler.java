@@ -52,7 +52,7 @@ public class HeadHandler implements ChannelHandler {
                 logger.error("Error writing response", e);
                 ctx.fireExceptionCaught(e);
             }
-            channel.getPipeline().completeLastWriteFuture(e);
+            channel.getPipeline().completePendingWriteFutures(e);
             if (msg instanceof ByteBuffer buffer) {
                 BufferPool.DEFAULT.release(buffer);
             } else if (msg instanceof FileChannelBody body) {
