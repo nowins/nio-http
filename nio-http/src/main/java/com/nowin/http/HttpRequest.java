@@ -3,6 +3,8 @@ package com.nowin.http;
 import java.io.File;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -59,6 +61,7 @@ public class HttpRequest {
 
     public void setUri(String uri) {
         this.uri = uri;
+        queryParameters.clear();
         parseQueryParameters(uri);
     }
 
@@ -107,19 +110,20 @@ public class HttpRequest {
     }
 
     public byte[] getBody() {
-        return body;
+        return body != null ? body.clone() : null;
     }
 
     public void setBody(byte[] body) {
-        this.body = body;
+        this.body = body != null ? body.clone() : null;
     }
 
     public List<HttpPart> getParts() {
-        return parts;
+        if (parts == null) return null;
+        return Collections.unmodifiableList(new ArrayList<>(parts));
     }
 
     public void setParts(List<HttpPart> parts) {
-        this.parts = parts;
+        this.parts = parts != null ? new ArrayList<>(parts) : null;
     }
 
     public File getTempBodyFile() {
@@ -131,11 +135,23 @@ public class HttpRequest {
     }
 
     public Map<String, List<String>> getBodyParameters() {
-        return bodyParameters;
+        if (bodyParameters == null) return null;
+        Map<String, List<String>> copy = new HashMap<>();
+        for (var entry : bodyParameters.entrySet()) {
+            copy.put(entry.getKey(), Collections.unmodifiableList(new ArrayList<>(entry.getValue())));
+        }
+        return Collections.unmodifiableMap(copy);
     }
 
     public void setBodyParameters(Map<String, List<String>> bodyParameters) {
-        this.bodyParameters = bodyParameters;
+        if (bodyParameters == null) {
+            this.bodyParameters = null;
+            return;
+        }
+        this.bodyParameters = new HashMap<>();
+        for (var entry : bodyParameters.entrySet()) {
+            this.bodyParameters.put(entry.getKey(), new ArrayList<>(entry.getValue()));
+        }
     }
 
     public Map<String, String> getQueryParameters() {
