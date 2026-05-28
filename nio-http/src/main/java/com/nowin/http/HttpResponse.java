@@ -434,6 +434,9 @@ public class HttpResponse {
             }
         }
         
+        // Refresh Date header to reflect actual response time
+        setHeader("Date", DATE_FORMAT.format(Instant.now()));
+
         StringBuilder headersBuffer = new StringBuilder();
 
         // Status line - use the protocol version from the request

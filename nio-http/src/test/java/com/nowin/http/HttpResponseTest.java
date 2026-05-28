@@ -513,5 +513,16 @@ class HttpResponseTest {
         String responseStr = StandardCharsets.UTF_8.decode(buffer).toString();
         assertTrue(responseStr.contains("Content-Length: 2"), "200 response should have Content-Length");
     }
+
+    @Test
+    void testDateHeaderIsRefreshedOnToByteBuffer() {
+        response.setStatusCode(200);
+        response.setHeader("Date", "Mon, 01 Jan 2020 00:00:00 GMT");
+
+        ByteBuffer buffer = response.toByteBuffer();
+        String responseStr = StandardCharsets.UTF_8.decode(buffer).toString();
+        assertFalse(responseStr.contains("Mon, 01 Jan 2020 00:00:00 GMT"), "Stale Date should be overwritten");
+        assertTrue(responseStr.contains("Date: "), "Date header should be present");
+    }
 }
 
