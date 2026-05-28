@@ -108,4 +108,44 @@ public class ParserTest {
         assertNotNull(req2);
         assertEquals("/second", req2.getUri());
     }
+
+    @Test
+    void testGetRequestWithContentLengthIsRejected() {
+        String raw = "GET /api HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\n\r\n";
+        HttpRequestParser parser = new HttpRequestParser();
+        ByteBuffer buffer = ByteBuffer.wrap(raw.getBytes(StandardCharsets.US_ASCII));
+        HttpRequest request = parser.parse(buffer);
+        assertNull(request, "GET with Content-Length > 0 should be rejected");
+        assertTrue(parser.hasError());
+    }
+
+    @Test
+    void testHeadRequestWithBodyIsRejected() {
+        String raw = "HEAD /api HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\n";
+        HttpRequestParser parser = new HttpRequestParser();
+        ByteBuffer buffer = ByteBuffer.wrap(raw.getBytes(StandardCharsets.US_ASCII));
+        HttpRequest request = parser.parse(buffer);
+        assertNull(request, "HEAD with body should be rejected");
+        assertTrue(parser.hasError());
+    }
+
+    @Test
+    void testGetRequestWithContentLengthZeroIsAllowed() {
+        String raw = "GET /api HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n";
+        HttpRequestParser parser = new HttpRequestParser();
+        ByteBuffer buffer = ByteBuffer.wrap(raw.getBytes(StandardCharsets.US_ASCII));
+        HttpRequest request = parser.parse(buffer);
+        assertNotNull(request, "GET with Content-Length: 0 should be allowed");
+        assertEquals("/api", request.getUri());
+    }
+
+    @Test
+    void testPostRequestWithBodyIsAllowed() {
+        String raw = "POST /api HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\nContent-Type: text/plain\r\n\r\nHello";
+        HttpRequestParser parser = new HttpRequestParser();
+        ByteBuffer buffer = ByteBuffer.wrap(raw.getBytes(StandardCharsets.US_ASCII));
+        HttpRequest request = parser.parse(buffer);
+        assertNotNull(request, "POST with body should be allowed");
+        assertEquals("Hello", new String(request.getBody(), StandardCharsets.UTF_8));
+    }
 }

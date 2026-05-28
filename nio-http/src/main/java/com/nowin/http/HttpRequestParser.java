@@ -182,6 +182,13 @@ public class HttpRequestParser {
         return true;
     }
 
+    private boolean isBodylessMethod() {
+        String method = request.getMethod();
+        return "GET".equalsIgnoreCase(method) || "HEAD".equalsIgnoreCase(method)
+                || "DELETE".equalsIgnoreCase(method) || "TRACE".equalsIgnoreCase(method)
+                || "CONNECT".equalsIgnoreCase(method);
+    }
+
     private boolean setupBodyParser() {
         String contentType = request.getHeaders().get("Content-Type".toLowerCase());
         String contentLengthStr = request.getHeaders().get("Content-Length".toLowerCase());
@@ -194,6 +201,13 @@ public class HttpRequestParser {
         if (isChunked && contentLengthStr != null && !"0".equals(contentLengthStr)) {
             logger.error("Request contains both Transfer-Encoding: chunked and Content-Length: {} — "
                     + "rejecting to prevent request smuggling", contentLengthStr);
+            state = ParseState.ERROR;
+            return false;
+        }
+
+        // Reject GET/HEAD/DELETE/TRACE/CONNECT with body (RFC 7230 sec 3.3)
+        if (isBodylessMethod() && (isChunked || (contentLengthStr != null && !"0".equals(contentLengthStr)))) {
+            logger.error("{} request must not contain a message body", request.getMethod());
             state = ParseState.ERROR;
             return false;
         }
