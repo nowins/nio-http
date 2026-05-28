@@ -21,11 +21,6 @@ public interface HttpBody {
     boolean isBuffered();
 
     /**
-     * Converts this body to a ByteBuffer. Only valid when {@link #isBuffered()} is true.
-     */
-    ByteBuffer toByteBuffer();
-
-    /**
      * Releases any underlying resources (file channels, mapped buffers, etc.).
      */
     void close() throws IOException;

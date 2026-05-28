@@ -39,11 +39,6 @@ public class FileChannelBody implements HttpBody {
         return false;
     }
 
-    @Override
-    public ByteBuffer toByteBuffer() {
-        throw new UnsupportedOperationException("FileChannelBody cannot be materialized to ByteBuffer");
-    }
-
     /**
      * Writes the next portion of this body to the target channel.
      * Each call resumes from where the previous call left off.
