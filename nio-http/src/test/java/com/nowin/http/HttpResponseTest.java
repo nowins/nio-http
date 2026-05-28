@@ -515,6 +515,26 @@ class HttpResponseTest {
     }
 
     @Test
+    void testExtractCharsetValueSimple() {
+        assertEquals("utf-8", HttpResponse.extractCharsetValue("charset=utf-8", 8));
+    }
+
+    @Test
+    void testExtractCharsetValueQuoted() {
+        assertEquals("utf-8", HttpResponse.extractCharsetValue("charset=\"utf-8\"", 8));
+    }
+
+    @Test
+    void testExtractCharsetValueWithTrailingParams() {
+        assertEquals("utf-8", HttpResponse.extractCharsetValue("charset=utf-8; boundary=something", 8));
+    }
+
+    @Test
+    void testExtractCharsetValueWithQuotedAndTrailingParams() {
+        assertEquals("utf-8", HttpResponse.extractCharsetValue("charset=\"utf-8\"; boundary=something", 8));
+    }
+
+    @Test
     void testDateHeaderIsRefreshedOnToByteBuffer() {
         response.setStatusCode(200);
         response.setHeader("Date", "Mon, 01 Jan 2020 00:00:00 GMT");

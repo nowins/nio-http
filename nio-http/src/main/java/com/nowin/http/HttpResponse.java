@@ -155,7 +155,7 @@ public class HttpResponse {
         if (contentType != null) {
             int charsetIndex = contentType.toLowerCase().indexOf("charset=");
             if (charsetIndex != -1) {
-                String charsetName = contentType.substring(charsetIndex + 8).trim();
+                String charsetName = extractCharsetValue(contentType, charsetIndex + 8);
                 try {
                     return java.nio.charset.Charset.forName(charsetName);
                 } catch (IllegalArgumentException e) {
@@ -164,6 +164,17 @@ public class HttpResponse {
             }
         }
         return StandardCharsets.UTF_8;
+    }
+
+    static String extractCharsetValue(String contentType, int start) {
+        // Find end of charset value (semicolon or end of string)
+        int end = contentType.indexOf(';', start);
+        String value = (end == -1 ? contentType.substring(start) : contentType.substring(start, end)).trim();
+        // Strip surrounding quotes
+        if (value.length() >= 2 && value.startsWith("\"") && value.endsWith("\"")) {
+            value = value.substring(1, value.length() - 1);
+        }
+        return value;
     }
 
     public void setBody(byte[] body) {
