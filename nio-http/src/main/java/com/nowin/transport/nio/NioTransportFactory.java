@@ -1,6 +1,6 @@
 package com.nowin.transport.nio;
 
-import com.nowin.core.EventLoopGroup;
+import com.nowin.transport.nio.NioEventLoopGroup;
 import com.nowin.transport.TransportFactory;
 import com.nowin.transport.TransportServerChannel;
 import com.nowin.transport.TransportSocketChannel;
@@ -18,7 +18,7 @@ public class NioTransportFactory implements TransportFactory {
 
     @Override
     public TransportEventLoopGroup createEventLoopGroup(int nThreads) {
-        return new EventLoopGroup(nThreads);
+        return new NioEventLoopGroup(nThreads);
     }
 
     @Override

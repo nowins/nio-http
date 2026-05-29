@@ -1,16 +1,13 @@
-package com.nowin.core;
+package com.nowin.transport.nio;
 
-import com.nowin.core.selector.SelectionKeyProcessor;
 import com.nowin.http.FileChannelBody;
 import com.nowin.pipeline.Channel;
 import com.nowin.transport.TransportChannel;
 import com.nowin.transport.TransportEventLoop;
 import com.nowin.transport.TransportSelectionKey;
-import com.nowin.transport.nio.NioSelectionKey;
-import com.nowin.transport.nio.NioServerChannel;
-import com.nowin.transport.nio.NioSocketChannel;
 import com.nowin.util.BufferPool;
 import com.nowin.util.ConnectionExceptions;
+import com.nowin.util.PriorityTask;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,9 +21,9 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
-public class EventLoop implements TransportEventLoop {
+public class NioEventLoop implements TransportEventLoop {
 
-    private static final Logger logger = LoggerFactory.getLogger(EventLoop.class);
+    private static final Logger logger = LoggerFactory.getLogger(NioEventLoop.class);
     private static final long MAX_BYTES_PER_WRITE_FLUSH = 2L * 1024 * 1024;
     private static final long MAX_WRITE_FLUSH_NANOS = TimeUnit.MILLISECONDS.toNanos(5);
 
@@ -45,7 +42,7 @@ public class EventLoop implements TransportEventLoop {
     private final AtomicLong bytesReadTotal = new AtomicLong(0);
     private final AtomicLong bytesWrittenTotal = new AtomicLong(0);
 
-    public EventLoop(Executor executor) {
+    public NioEventLoop(Executor executor) {
         // executor;
         this.scheduledExecutor = new ScheduledThreadPoolExecutor(1);
         try {
@@ -55,7 +52,7 @@ public class EventLoop implements TransportEventLoop {
         }
         this.id = nextId++;
         this.thread = new Thread(this::run);
-        this.thread.setName("EventLoop-" + this.id);
+        this.thread.setName("NioEventLoop-" + this.id);
     }
 
     public void start() {
@@ -86,7 +83,7 @@ public class EventLoop implements TransportEventLoop {
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                logger.error("Interrupted while waiting for EventLoop thread to terminate", e);
+                logger.error("Interrupted while waiting for NioEventLoop thread to terminate", e);
             }
         }
     }
@@ -103,7 +100,7 @@ public class EventLoop implements TransportEventLoop {
                     } else {
                         selector.select(100);  // blocking
                     }
-                    
+
                     int selected = selector.selectedKeys().size();
                     selectCount.incrementAndGet();
                     if (selected == 0) {
@@ -118,13 +115,13 @@ public class EventLoop implements TransportEventLoop {
         } finally {
             try {
                 selector.close();
-                logger.info("EventLoop {} selector closed", id);
+                logger.info("NioEventLoop {} selector closed", id);
             } catch (IOException e) {
                 logger.error("Error closing selector", e);
             }
         }
     }
-    
+
     /**
      * handle tasks in the task queue
      * @return true: there are tasks to process, otherwise false
@@ -136,13 +133,13 @@ public class EventLoop implements TransportEventLoop {
         int maxTasksPerIteration = 100;
         long maxProcessingTimePerIteration = 50;
         long startTime = System.currentTimeMillis();
-        
+
         while (processedTasks < maxTasksPerIteration && (task = taskQueue.poll()) != null) {
             if (System.currentTimeMillis() - startTime > maxProcessingTimePerIteration) {
                 taskQueue.offer(task);
                 break;
             }
-            
+
             hasTasks = true;
             processedTasks++;
             try {
@@ -151,7 +148,7 @@ public class EventLoop implements TransportEventLoop {
                 logger.error("Error in task", e);
             }
         }
-        
+
         return hasTasks;
     }
 
@@ -208,7 +205,7 @@ public class EventLoop implements TransportEventLoop {
     }
 
     private void handleAccept(SelectionKey key) {
-        SelectionKeyProcessor processor = (SelectionKeyProcessor) key.attachment();
+        NioSelectionKeyProcessor processor = (NioSelectionKeyProcessor) key.attachment();
         processor.process(key);
     }
 

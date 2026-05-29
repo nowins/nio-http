@@ -1,6 +1,6 @@
 package com.nowin.transport;
 
-import com.nowin.core.PriorityTask;
+import com.nowin.util.PriorityTask;
 import com.nowin.pipeline.Channel;
 
 import java.util.concurrent.ScheduledFuture;

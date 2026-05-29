@@ -1,4 +1,4 @@
-package com.nowin.core.selector;
+package com.nowin.server;
 
 import com.nowin.pipeline.Channel;
 

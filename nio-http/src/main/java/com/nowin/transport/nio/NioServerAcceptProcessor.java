@@ -1,8 +1,9 @@
-package com.nowin.core.selector;
+package com.nowin.transport.nio;
 
 import com.nowin.pipeline.Channel;
 import com.nowin.pipeline.ChannelInitializer;
 import com.nowin.pipeline.ChannelPipeline;
+import com.nowin.server.ConnectionLimiter;
 import com.nowin.server.HttpServerObserver;
 import com.nowin.server.LoadMonitor;
 import com.nowin.server.MetricsCollector;
@@ -20,9 +21,9 @@ import java.net.SocketOption;
 import java.net.StandardSocketOptions;
 import java.nio.channels.SelectionKey;
 
-public class ServerAcceptProcessor implements SelectionKeyProcessor {
+public class NioServerAcceptProcessor implements NioSelectionKeyProcessor {
 
-    private static final Logger logger = LoggerFactory.getLogger(ServerAcceptProcessor.class);
+    private static final Logger logger = LoggerFactory.getLogger(NioServerAcceptProcessor.class);
 
     private final TransportEventLoopGroup eventLoopGroup;
     private final ConnectionLimiter connectionLimiter;
@@ -33,7 +34,7 @@ public class ServerAcceptProcessor implements SelectionKeyProcessor {
     private final ChannelInitializer channelInitializer;
     private final TransportServerChannel serverChannel;
 
-    public ServerAcceptProcessor(TransportEventLoopGroup eventLoopGroup,
+    public NioServerAcceptProcessor(TransportEventLoopGroup eventLoopGroup,
                                  ConnectionLimiter connectionLimiter,
                                  ServerConfig config,
                                  LoadMonitor loadMonitor,

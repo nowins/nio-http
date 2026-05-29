@@ -1,7 +1,6 @@
 package com.nowin.server;
 
-import com.nowin.core.selector.ConnectionLimiter;
-import com.nowin.core.selector.ServerAcceptProcessor;
+import com.nowin.transport.nio.NioServerAcceptProcessor;
 import com.nowin.transport.TransportEventLoopGroup;
 import com.nowin.transport.TransportFactory;
 import com.nowin.transport.TransportServerChannel;
@@ -190,7 +189,7 @@ public class NioHttpServer {
             }
         };
 
-        ServerAcceptProcessor acceptProcessor = new ServerAcceptProcessor(
+        NioServerAcceptProcessor acceptProcessor = new NioServerAcceptProcessor(
                 workerGroup, connectionLimiter, config, loadMonitor, metricsCollector, observer, channelInitializer, serverChannel);
         bossGroup.next().register(serverChannel, TransportSelectionKey.OP_ACCEPT, acceptProcessor);
     }

@@ -1,12 +1,9 @@
-package com.nowin.core;
+package com.nowin.transport.nio;
 
 import com.nowin.pipeline.Channel;
 import com.nowin.pipeline.ChannelHandlerContext;
 import com.nowin.pipeline.ChannelPipeline;
 import com.nowin.pipeline.handler.ChannelHandler;
-import com.nowin.core.selector.SelectionKeyProcessor;
-import com.nowin.transport.nio.NioSelectionKey;
-import com.nowin.transport.nio.NioSocketChannel;
 import com.nowin.util.BufferPool;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -30,14 +27,14 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class EventLoopTest {
+class NioEventLoopTest {
 
-    private EventLoop eventLoop;
+    private NioEventLoop eventLoop;
 
     @BeforeEach
     void setUp() {
         // Create an event loop with a simple executor
-        eventLoop = new EventLoop(null);
+        eventLoop = new NioEventLoop(null);
         eventLoop.start();
     }
 
@@ -171,8 +168,8 @@ class EventLoopTest {
 
         // Wait a short time for exception to be handled
         Thread.sleep(100);
-        // Exception should be caught by EventLoop's try-catch, not propagate to uncaught exception handler
-        assertFalse(exceptionCaught.get(), "Exception should be caught and handled by EventLoop");
+        // Exception should be caught by NioEventLoop's try-catch, not propagate to uncaught exception handler
+        assertFalse(exceptionCaught.get(), "Exception should be caught and handled by NioEventLoop");
     }
 
     @Test
@@ -207,7 +204,7 @@ class EventLoopTest {
                 try {
                     if (taskCount.get() == 0) {
                         // First task is long-running
-                        Thread.sleep(100); // 模拟长时间运行的任务
+                        Thread.sleep(100);
                         longTaskLatch.countDown();
                     }
                     taskCount.incrementAndGet();
@@ -220,7 +217,7 @@ class EventLoopTest {
 
         // Wait for long task to complete
         longTaskLatch.await(200, TimeUnit.MILLISECONDS);
-        
+
         // Wait for all tasks to complete
         boolean completed = latch.await(1000, TimeUnit.MILLISECONDS);
         assertTrue(completed, "All tasks should have been processed eventually");
@@ -309,15 +306,15 @@ class EventLoopTest {
                 null,
                 SelectionKey.OP_ACCEPT,
                 SelectionKey.OP_ACCEPT);
-        selectionKey.attach((SelectionKeyProcessor) key -> processed.set(key == selectionKey));
+        selectionKey.attach((NioSelectionKeyProcessor) key -> processed.set(key == selectionKey));
 
         invokeProcessSelectionKey(selectionKey);
 
-        assertTrue(processed.get(), "Accept event should dispatch through SelectionKeyProcessor");
+        assertTrue(processed.get(), "Accept event should dispatch through NioSelectionKeyProcessor");
     }
 
     private void invokeProcessSelectionKey(SelectionKey key) throws Exception {
-        Method method = EventLoop.class.getDeclaredMethod("processSelectionKey", SelectionKey.class);
+        Method method = NioEventLoop.class.getDeclaredMethod("processSelectionKey", SelectionKey.class);
         method.setAccessible(true);
         method.invoke(eventLoop, key);
     }

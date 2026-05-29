@@ -134,7 +134,7 @@ public class DefaultChannelFutureTest {
                 public void shutdown() {}
                 public boolean inEventLoop() { return false; }
                 public void execute(Runnable r) { pendingTasks.add(r); }
-                public void execute(Runnable r, com.nowin.core.PriorityTask.Priority p) { pendingTasks.add(r); }
+                public void execute(Runnable r, com.nowin.util.PriorityTask.Priority p) { pendingTasks.add(r); }
                 public void executeHighPriority(Runnable r) { pendingTasks.add(r); }
                 public void executeLowPriority(Runnable r) { pendingTasks.add(r); }
                 public java.util.concurrent.ScheduledFuture<?> schedule(Runnable c, long d, java.util.concurrent.TimeUnit u) { return null; }

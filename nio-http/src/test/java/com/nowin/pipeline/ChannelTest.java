@@ -1,7 +1,7 @@
 package com.nowin.pipeline;
 
-import com.nowin.core.EventLoop;
-import com.nowin.core.selector.ConnectionLimiter;
+import com.nowin.transport.nio.NioEventLoop;
+import com.nowin.server.ConnectionLimiter;
 import com.nowin.transport.TransportSelectionKey;
 import com.nowin.transport.TransportSocketChannel;
 import org.junit.jupiter.api.AfterEach;
@@ -24,12 +24,12 @@ class ChannelTest {
     private Channel channel;
     private TransportSocketChannel socketChannel;
     private ChannelPipeline pipeline;
-    private EventLoop eventLoop;
+    private NioEventLoop eventLoop;
 
     @BeforeEach
     void setUp() {
-        // 使用真实的EventLoop实例，而不是模拟对象
-        eventLoop = new EventLoop(null);
+        // 使用真实的NioEventLoop实例，而不是模拟对象
+        eventLoop = new NioEventLoop(null);
         eventLoop.start();
         
         pipeline = new ChannelPipeline();
@@ -39,7 +39,7 @@ class ChannelTest {
     
     @AfterEach
     void tearDown() {
-        // 关闭EventLoop，释放资源
+        // 关闭NioEventLoop，释放资源
         if (eventLoop != null) {
             eventLoop.shutdown();
         }

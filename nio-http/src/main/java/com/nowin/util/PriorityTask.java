@@ -1,4 +1,4 @@
-package com.nowin.core;
+package com.nowin.util;
 
 public class PriorityTask implements Runnable, Comparable<PriorityTask> {
 

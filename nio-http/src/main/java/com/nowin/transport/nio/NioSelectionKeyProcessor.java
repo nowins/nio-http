@@ -1,8 +1,8 @@
-package com.nowin.core.selector;
+package com.nowin.transport.nio;
 
 import java.nio.channels.SelectionKey;
 
-public interface SelectionKeyProcessor {
+public interface NioSelectionKeyProcessor {
 
     void process(SelectionKey key);
 }
