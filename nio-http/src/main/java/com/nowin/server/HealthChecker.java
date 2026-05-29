@@ -1,4 +1,4 @@
-package com.nowin.server.health;
+package com.nowin.server;
 
 /**
  * Pluggable health checker for {@link HealthProbe} types.

@@ -1,12 +1,15 @@
-package com.nowin.server;
+package com.nowin.pipeline;
 
-import com.nowin.pipeline.Channel;
-import com.nowin.pipeline.ChannelInitializer;
-import com.nowin.pipeline.ChannelPipeline;
 import com.nowin.pipeline.handler.impl.ExceptionHandler;
 import com.nowin.pipeline.handler.impl.HttpServerCodec;
 import com.nowin.pipeline.handler.impl.HttpServerHandler;
+import com.nowin.pipeline.handler.impl.HttpUpgradeHandler;
 import com.nowin.pipeline.handler.impl.SslHandler;
+import com.nowin.server.NioHttpServer;
+import com.nowin.server.Router;
+import com.nowin.server.ServerConfig;
+import com.nowin.server.SslContext;
+import com.nowin.server.VirtualHost;
 
 import java.util.Map;
 import java.util.concurrent.Executor;
@@ -65,7 +68,7 @@ public class HttpChannelInitializer implements ChannelInitializer {
         }
 
         // Protocol upgrade placeholder (HTTP/2, WebSocket) — currently passes through
-        pipeline.addLast("upgrade", new com.nowin.server.handler.HttpUpgradeHandler());
+        pipeline.addLast("upgrade", new HttpUpgradeHandler());
 
         pipeline.addLast("codec", new HttpServerCodec(config.getMaxHeaderSize(), config.getMaxBodySize()));
         pipeline.addLast("handler", new HttpServerHandler(virtualHosts, defaultVirtualHost, router, applicationExecutor));

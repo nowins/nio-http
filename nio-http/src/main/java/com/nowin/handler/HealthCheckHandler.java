@@ -4,9 +4,9 @@ import com.nowin.http.HttpRequest;
 import com.nowin.http.HttpResponse;
 import com.nowin.server.LoadMonitor;
 import com.nowin.server.NioHttpServer;
-import com.nowin.server.health.HealthChecker;
-import com.nowin.server.health.HealthProbe;
-import com.nowin.server.health.HealthStatus;
+import com.nowin.server.HealthChecker;
+import com.nowin.server.HealthProbe;
+import com.nowin.server.HealthStatus;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;

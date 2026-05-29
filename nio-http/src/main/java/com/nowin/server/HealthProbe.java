@@ -1,4 +1,4 @@
-package com.nowin.server.health;
+package com.nowin.server;
 
 /**
  * Kubernetes-style health probe types.

@@ -2,7 +2,7 @@ package com.nowin;
 
 import com.nowin.server.ServerConfig;
 import com.nowin.server.ServerConfiguration;
-import com.nowin.server.HttpChannelInitializer;
+import com.nowin.pipeline.HttpChannelInitializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

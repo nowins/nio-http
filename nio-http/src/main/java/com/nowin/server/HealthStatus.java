@@ -1,4 +1,4 @@
-package com.nowin.server.health;
+package com.nowin.server;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
