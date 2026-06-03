@@ -18,7 +18,7 @@
     <dependencies>
         <dependency>
             <groupId>com.nowin</groupId>
-            <artifactId>nio-http</artifactId>
+            <artifactId>nio-http-core</artifactId>
             <version>${project.version}</version>
         </dependency>
         <dependency>

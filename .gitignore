@@ -9,6 +9,7 @@ target/
 .idea/compiler.xml
 .idea/libraries/
 .idea/*
+.idea
 *.iws
 *.iml
 *.ipr
@@ -41,3 +42,5 @@ build/
 ### Others
 .clj-kondo
 *.log
+.github
+.claude

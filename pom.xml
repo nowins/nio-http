@@ -14,7 +14,7 @@
     <url>http://maven.apache.org</url>
 
     <modules>
-        <module>nio-http</module>
+        <module>nio-http-core</module>
         <module>nio-http-cli</module>
     </modules>
 

@@ -10,7 +10,7 @@
         <version>1.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>nio-http</artifactId>
+    <artifactId>nio-http-core</artifactId>
     <packaging>jar</packaging>
     <name>nio-http Core</name>
     <description>Modern Java NIO-based HTTP Server core library</description>
