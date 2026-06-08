@@ -1,8 +1,15 @@
 package com.nowin.http;
 
 import java.io.File;
+import java.io.ByteArrayInputStream;
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.io.IOException;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.CopyOption;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -132,6 +139,46 @@ public class HttpRequest {
 
     public void setTempBodyFile(File tempFile) {
         this.tempBodyFile = tempFile;
+    }
+
+    public InputStream openBodyStream() throws IOException {
+        if (tempBodyFile != null) {
+            return new FileInputStream(tempBodyFile);
+        }
+        return new ByteArrayInputStream(body != null ? body : new byte[0]);
+    }
+
+    public void transferBodyTo(Path destination, CopyOption... options) throws IOException {
+        if (tempBodyFile != null) {
+            Path source = detachTempBodyFile();
+            try {
+                Files.move(source, destination, options);
+            } catch (IOException moveFailure) {
+                try {
+                    try (InputStream input = Files.newInputStream(source)) {
+                        Files.copy(input, destination, options);
+                    }
+                    Files.deleteIfExists(source);
+                } catch (IOException copyFailure) {
+                    tempBodyFile = source.toFile();
+                    copyFailure.addSuppressed(moveFailure);
+                    throw copyFailure;
+                }
+            }
+            return;
+        }
+        try (InputStream input = openBodyStream()) {
+            Files.copy(input, destination, options);
+        }
+    }
+
+    public Path detachTempBodyFile() {
+        if (tempBodyFile == null) {
+            return null;
+        }
+        Path path = tempBodyFile.toPath();
+        tempBodyFile = null;
+        return path;
     }
 
     public Map<String, List<String>> getBodyParameters() {

@@ -16,6 +16,7 @@
     <modules>
         <module>nio-http-core</module>
         <module>nio-http-cli</module>
+        <module>nio-http-webdav</module>
     </modules>
 
     <properties>

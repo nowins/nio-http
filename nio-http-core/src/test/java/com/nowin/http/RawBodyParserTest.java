@@ -41,6 +41,20 @@ public class RawBodyParserTest {
     }
 
     @Test
+    void testParseDirectBufferCompletes() throws IOException {
+        RawBodyParser parser = new RawBodyParser(testData.length, 1024);
+        ByteBuffer directBuffer = ByteBuffer.allocateDirect(testData.length);
+        directBuffer.put(testData);
+        directBuffer.flip();
+
+        parser.parse(directBuffer, headers);
+
+        assertTrue(parser.isComplete());
+        assertFalse(parser.hasError());
+        assertArrayEquals(testData, parser.getInMemoryData());
+    }
+
+    @Test
     void testParseLargeContentToFile(@TempDir File tempDir) throws IOException {
         // Create large test data (> threshold)
         byte[] largeData = new byte[2048]; // 2KB

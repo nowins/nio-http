@@ -72,6 +72,7 @@ public class RawBodyParser implements BodyParser {
         // Process data from buffer up to the expected content length
         while (buffer.hasRemaining() && bytesRead < contentLength) {
             int bytesToWrite = (int) Math.min(buffer.remaining(), contentLength - bytesRead);
+            int bytesWritten = bytesToWrite;
             // if the buffer has an underlying array, use it
             if (buffer.hasArray()) {
                 dataStream.write(buffer.array(), buffer.position(), bytesToWrite);
@@ -86,7 +87,7 @@ public class RawBodyParser implements BodyParser {
                     bytesToWrite -= chunkSize;
                 }
             }
-            bytesRead += bytesToWrite;
+            bytesRead += bytesWritten;
         }
 
         // After processing, check if we've read the expected amount and if there's still more data in the buffer

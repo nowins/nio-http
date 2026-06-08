@@ -34,8 +34,20 @@ public class HttpResponse {
             Map.entry("content-disposition", "Content-Disposition"),
             Map.entry("accept", "Accept"),
             Map.entry("accept-encoding", "Accept-Encoding"),
+            Map.entry("accept-ranges", "Accept-Ranges"),
             Map.entry("range", "Range"),
-            Map.entry("vary", "Vary")
+            Map.entry("vary", "Vary"),
+            Map.entry("allow", "Allow"),
+            Map.entry("dav", "DAV"),
+            Map.entry("depth", "Depth"),
+            Map.entry("destination", "Destination"),
+            Map.entry("overwrite", "Overwrite"),
+            Map.entry("timeout", "Timeout"),
+            Map.entry("lock-token", "Lock-Token"),
+            Map.entry("www-authenticate", "WWW-Authenticate"),
+            Map.entry("etag", "ETag"),
+            Map.entry("last-modified", "Last-Modified"),
+            Map.entry("location", "Location")
     );
 
     private int statusCode = 200;
@@ -65,12 +77,21 @@ public class HttpResponse {
             case 201 -> "Created";
             case 204 -> "No Content";
             case 206 -> "Partial Content";
+            case 207 -> "Multi-Status";
+            case 401 -> "Unauthorized";
+            case 403 -> "Forbidden";
             case 400 -> "Bad Request";
             case 404 -> "Not Found";
             case 500 -> "Internal Server Error";
             case 405 -> "Method Not Allowed";
+            case 409 -> "Conflict";
+            case 412 -> "Precondition Failed";
+            case 415 -> "Unsupported Media Type";
             case 304 -> "Not Modified";
             case 416 -> "Requested Range Not Satisfiable";
+            case 423 -> "Locked";
+            case 424 -> "Failed Dependency";
+            case 507 -> "Insufficient Storage";
             default -> "";
         };
 
@@ -437,6 +458,16 @@ public class HttpResponse {
         if (protocolVersion.equalsIgnoreCase("HTTP/1.0") && isBodyAllowed()) {
             long totalBodyLength = httpBody != null ? httpBody.contentLength() : 0;
             setHeader("Content-Length", String.valueOf(totalBodyLength));
+        }
+
+        // HTTP/1.1 keep-alive responses without either a body length or chunked
+        // framing leave clients waiting for EOF. Empty body-allowed responses
+        // should be explicit about their zero length.
+        if (isBodyAllowed()
+                && !chunkedEncoding
+                && httpBody == null
+                && !headers.containsKey("content-length")) {
+            setHeader("Content-Length", "0");
         }
 
         setHeader("Date", DATE_FORMAT.format(Instant.now()));
