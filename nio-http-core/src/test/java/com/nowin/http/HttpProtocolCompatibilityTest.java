@@ -354,7 +354,6 @@ public class HttpProtocolCompatibilityTest {
         
         ByteBuffer buffer = response.toByteBuffer();
         String responseStr = StandardCharsets.UTF_8.decode(buffer).toString();
-        System.out.println("Actual response: " + responseStr);
         
         assertTrue(responseStr.contains("206 Partial Content"));
         assertTrue(responseStr.contains("Content-Range: bytes 0-10/20"));

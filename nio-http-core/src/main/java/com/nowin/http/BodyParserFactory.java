@@ -55,7 +55,7 @@ public class BodyParserFactory {
                     return part.substring(9).replace("\"", "");
                 }
             }
-            logger.error("Missing boundary for multipart/form-data request");
+            logger.debug("multipart_boundary_missing contentType={}", contentType);
         }
         return null;
     }

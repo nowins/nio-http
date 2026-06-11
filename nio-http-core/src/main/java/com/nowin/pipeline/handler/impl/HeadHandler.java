@@ -43,13 +43,15 @@ public class HeadHandler implements ChannelHandler {
             } else if (msg instanceof FileChannelBody body) {
                 writeFileChannelBody(ctx, channel, clientChannel, body);
             } else {
-                logger.warn("Unsupported message type in HeadHandler: {}", msg.getClass().getName());
+                logger.warn("head_write_unsupported_message remote={} messageType={}",
+                        safeRemoteAddress(clientChannel), msg.getClass().getName());
             }
         } catch (Exception e) {
             if (ConnectionExceptions.isClientDisconnect(e)) {
-                logger.debug("Client disconnected while writing response to {}: {}", safeRemoteAddress(clientChannel), e.getMessage());
+                logger.debug("client_disconnected_during_head_write remote={} cause={}",
+                        safeRemoteAddress(clientChannel), e.getMessage());
             } else {
-                logger.error("Error writing response", e);
+                logger.error("head_write_failed remote={}", safeRemoteAddress(clientChannel), e);
                 ctx.fireExceptionCaught(e);
             }
             channel.getPipeline().completePendingWriteFutures(e);
@@ -59,7 +61,7 @@ public class HeadHandler implements ChannelHandler {
                 try {
                     body.close();
                 } catch (IOException ex) {
-                    logger.warn("Error closing FileChannelBody after write failure", ex);
+                    logger.warn("file_body_close_after_write_failure remote={}", safeRemoteAddress(clientChannel), ex);
                 }
             }
         }
@@ -80,11 +82,12 @@ public class HeadHandler implements ChannelHandler {
             while (buffer.hasRemaining()) {
                 int written = clientChannel.write(buffer);
                 totalWritten += written;
-                logger.debug("try to write data {} byte data to {}", written, clientChannel.getRemoteAddress());
+                logger.trace("head_write_bytes remote={} bytes={}", clientChannel.getRemoteAddress(), written);
                 if (written == 0) {
                     ByteBuffer remaining = buffer.slice();
                     channel.addToWrite(remaining);
-                    logger.debug("add remaining {} byte data to pending list {}", buffer.remaining(), clientChannel.getRemoteAddress());
+                    logger.debug("head_write_queued remote={} remainingBytes={}",
+                            clientChannel.getRemoteAddress(), buffer.remaining());
 
                     TransportSelectionKey key = ctx.getSelectionKey();
                     key.interestOps(key.interestOps() | TransportSelectionKey.OP_WRITE);
@@ -97,7 +100,7 @@ public class HeadHandler implements ChannelHandler {
                 channel.getMetricsCollector().recordBytesWritten(totalWritten);
             }
 
-            logger.debug("write data to {} completed", clientChannel.getRemoteAddress());
+            logger.debug("head_write_complete remote={} bytes={}", clientChannel.getRemoteAddress(), totalWritten);
             TransportSelectionKey key = ctx.getSelectionKey();
             key.interestOps(key.interestOps() & ~TransportSelectionKey.OP_WRITE);
             channel.onWriteCompletion();
@@ -112,7 +115,7 @@ public class HeadHandler implements ChannelHandler {
         while (!body.isComplete() && totalWritten < MAX_FILE_BYTES_PER_WRITE) {
             long written = body.writeTo(clientChannel, MAX_FILE_BYTES_PER_WRITE - totalWritten);
             totalWritten += written;
-            logger.debug("transferTo wrote {} bytes to {}", written, clientChannel.getRemoteAddress());
+            logger.trace("head_file_transfer_bytes remote={} bytes={}", clientChannel.getRemoteAddress(), written);
             if (written == 0) {
                 queueFileBody(ctx, channel, body);
                 return;
@@ -128,7 +131,7 @@ public class HeadHandler implements ChannelHandler {
             channel.getMetricsCollector().recordBytesWritten((int) Math.min(totalWritten, Integer.MAX_VALUE));
         }
 
-        logger.debug("FileChannelBody transfer to {} completed", clientChannel.getRemoteAddress());
+        logger.debug("head_file_transfer_complete remote={} bytes={}", clientChannel.getRemoteAddress(), totalWritten);
         body.close();
         TransportSelectionKey key = ctx.getSelectionKey();
         key.interestOps(key.interestOps() & ~TransportSelectionKey.OP_WRITE);
@@ -137,7 +140,8 @@ public class HeadHandler implements ChannelHandler {
 
     private void queueFileBody(ChannelHandlerContext ctx, com.nowin.pipeline.Channel channel, FileChannelBody body) {
         channel.addToWrite(body);
-        logger.debug("FileChannelBody partially transferred ({} remaining), queued for async write", body.remaining());
+        logger.debug("head_file_transfer_queued remote={} remainingBytes={}",
+                safeRemoteAddress(channel.transportChannel()), body.remaining());
 
         TransportSelectionKey key = ctx.getSelectionKey();
         key.interestOps(key.interestOps() | TransportSelectionKey.OP_WRITE);

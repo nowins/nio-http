@@ -11,17 +11,22 @@ public class TailHandler implements ChannelHandler {
 
     @Override
     public void channelRead(ChannelHandlerContext ctx, Object msg) {
-        logger.debug("TailHandler read: {}", msg);
+        logger.debug("tail_read_unhandled messageType={}", msg != null ? msg.getClass().getName() : "null");
     }
 
     @Override
     public void channelWrite(ChannelHandlerContext ctx, Object msg) {
-        logger.debug("TailHandler write: {}", msg);
+        logger.debug("tail_write_unhandled messageType={}", msg != null ? msg.getClass().getName() : "null");
     }
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        logger.error("Unhandled exception reached tail of pipeline. Closing channel.", cause);
+        logger.error("pipeline_exception_unhandled channel={} remote={}",
+                ctx != null ? ctx.channel() : "unknown",
+                ctx != null && ctx.channel() != null && ctx.channel().getRemoteAddress() != null
+                        ? ctx.channel().getRemoteAddress()
+                        : "unknown",
+                cause);
         ctx.close();
     }
 }

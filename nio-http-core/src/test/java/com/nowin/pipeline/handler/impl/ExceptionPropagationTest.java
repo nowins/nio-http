@@ -27,7 +27,6 @@ public class ExceptionPropagationTest {
             }
             @Override
             public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-                System.out.println("THROWER exceptionCaught called!");
                 throwerExceptionCaught[0] = true;
                 ctx.fireExceptionCaught(cause);
             }
@@ -37,14 +36,7 @@ public class ExceptionPropagationTest {
         pipeline.setChannel(channel);
 
         ByteBuffer dummy = ByteBuffer.allocate(0);
-        try {
-            pipeline.fireChannelRead(dummy);
-        } catch (Exception e) {
-            System.out.println("UNCAUGHT from fireChannelRead: " + e);
-        }
-
-        System.out.println("throwerExceptionCaught=" + throwerExceptionCaught[0]);
-        System.out.println("channel.isClosed=" + channel.isClosed);
+        pipeline.fireChannelRead(dummy);
 
         assertTrue(throwerExceptionCaught[0], "Thrower should have received exception via exceptionCaught");
         assertTrue(channel.isClosed, "Channel should be closed when exception reaches tail");

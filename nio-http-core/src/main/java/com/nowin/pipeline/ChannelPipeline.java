@@ -54,7 +54,7 @@ public class ChannelPipeline {
         try {
             head.getHandler().channelRead(head, msg);
         } catch (Exception e) {
-            logger.error("Exception caught during channelRead, firing exceptionCaught", e);
+            logger.debug("channel_read_exception_firing_exception_caught cause={}", e.toString());
             fireExceptionCaught(e);
         }
     }
@@ -78,10 +78,10 @@ public class ChannelPipeline {
         DefaultChannelFuture future;
         while ((future = writeFutures.poll()) != null) {
             if (cause != null) {
-                logger.debug("write failed");
+                logger.debug("pipeline_write_failed cause={}", cause.toString());
                 future.setFailure(cause);
             } else {
-                logger.debug("write success");
+                logger.trace("pipeline_write_success");
                 future.setSuccess();
             }
         }

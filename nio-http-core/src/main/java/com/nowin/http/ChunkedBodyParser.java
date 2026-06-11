@@ -125,7 +125,7 @@ public class ChunkedBodyParser implements BodyParser {
                             try {
                                 currentChunkSize = Long.parseLong(chunkSizeStr, 16);
                             } catch (NumberFormatException e) {
-                                logger.error("Invalid chunk size format: {}", chunkSizeStr);
+                                logger.debug("chunked_parse_invalid_size value={}", chunkSizeStr);
                                 state = State.ERROR;
                                 cleanupOnError();
                                 return;
@@ -146,7 +146,8 @@ public class ChunkedBodyParser implements BodyParser {
                             // Check if we need to switch to file storage
                             // Check max body size before accepting chunk
                             if (maxBodySize > 0 && totalBytesRead + currentChunkSize > maxBodySize) {
-                                logger.error("Chunked body would exceed maximum limit of {}", maxBodySize);
+                                logger.warn("chunked_body_too_large totalBytesRead={} chunkSize={} maxBodySize={}",
+                                        totalBytesRead, currentChunkSize, maxBodySize);
                                 state = State.ERROR;
                                 cleanupOnError();
                                 return;
@@ -158,7 +159,8 @@ public class ChunkedBodyParser implements BodyParser {
                             
                             // Check for potential overflow in total bytes read
                             if (totalBytesRead > Long.MAX_VALUE - currentChunkSize) {
-                                logger.error("Total bytes read would overflow: {} + {}", totalBytesRead, currentChunkSize);
+                                logger.warn("chunked_body_size_overflow totalBytesRead={} chunkSize={}",
+                                        totalBytesRead, currentChunkSize);
                                 state = State.ERROR;
                                 cleanupOnError();
                                 return;
@@ -166,7 +168,7 @@ public class ChunkedBodyParser implements BodyParser {
                             
                             // Check for potential integer overflow in chunk size
                             if (currentChunkSize > Integer.MAX_VALUE) {
-                                logger.error("Chunk size too large: {}", currentChunkSize);
+                                logger.warn("chunked_chunk_too_large chunkSize={}", currentChunkSize);
                                 state = State.ERROR;
                                 cleanupOnError();
                                 return;
@@ -188,7 +190,7 @@ public class ChunkedBodyParser implements BodyParser {
                 
                 // Check if line buffer exceeds maximum allowed length
                 if (lineBuffer.size() > MAX_LINE_LENGTH) {
-                    logger.error("Chunk size line exceeds maximum allowed length of {}", MAX_LINE_LENGTH);
+                    logger.debug("chunked_size_line_too_long maxLength={}", MAX_LINE_LENGTH);
                     state = State.ERROR;
                     cleanupOnError();
                     return;
@@ -206,7 +208,8 @@ public class ChunkedBodyParser implements BodyParser {
             int toRead = (int) Math.min(remaining, buffer.remaining());
 
             if (maxBodySize > 0 && totalBytesRead + toRead > maxBodySize) {
-                logger.error("Chunked body total size would exceed maximum limit of {}", maxBodySize);
+                logger.warn("chunked_body_too_large totalBytesRead={} bytesToRead={} maxBodySize={}",
+                        totalBytesRead, toRead, maxBodySize);
                 state = State.ERROR;
                 cleanupOnError();
                 return;
@@ -327,7 +330,7 @@ public class ChunkedBodyParser implements BodyParser {
             
             // Check if line buffer exceeds maximum allowed length
             if (lineBuffer.size() > MAX_LINE_LENGTH) {
-                logger.error("Trailer line exceeds maximum allowed length of {}", MAX_LINE_LENGTH);
+                logger.debug("chunked_trailer_line_too_long maxLength={}", MAX_LINE_LENGTH);
                 state = State.ERROR;
                 cleanupOnError();
                 return;
@@ -353,7 +356,7 @@ public class ChunkedBodyParser implements BodyParser {
                     }
 
                     // Otherwise, parse trailer header (we'll ignore trailers for now)
-                    logger.debug("Received trailer: {}", trailerLine.trim());
+                    logger.trace("chunked_trailer_ignored trailer={}", trailerLine.trim());
                 }
             }
         }

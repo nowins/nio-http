@@ -1,5 +1,6 @@
 package com.nowin.pipeline.handler.impl;
 
+import com.nowin.exception.InvalidRequestException;
 import com.nowin.http.HttpRequest;
 import com.nowin.http.HttpRequestParser;
 import com.nowin.pipeline.ChannelHandlerContext;
@@ -37,51 +38,54 @@ public class HttpServerCodec implements ChannelHandler {
                 remoteAddr = clientChannel.getRemoteAddress().toString();
             }
         } catch (IOException e) {
-            logger.error("Error getting remote address", e);
+            logger.debug("remote_address_unavailable cause={}", e.getMessage());
         }
 
-        logger.debug("ChannelRead called for client: {}", remoteAddr);
+        logger.debug("http_read_start remote={}", remoteAddr);
 
         ByteBuffer buffer = (ByteBuffer) msg;
         try {
             if (!buffer.hasRemaining()) {
-                logger.debug("Empty buffer from {}", remoteAddr);
+                logger.debug("http_read_empty remote={}", remoteAddr);
                 return;
             }
 
             while (buffer.hasRemaining()) {
-                logger.debug("Processing {} bytes from {}", buffer.remaining(), remoteAddr);
+                logger.trace("http_read_bytes remote={} bytes={}", remoteAddr, buffer.remaining());
                 HttpRequest request = parser.parse(buffer);
 
                 if (parser.hasError()) {
-                    logger.error("Invalid request from {}", remoteAddr);
+                    logger.debug("http_request_invalid remote={}", remoteAddr);
                     parser.reset();
-                    ctx.fireExceptionCaught(new IOException("Invalid request"));
+                    ctx.fireExceptionCaught(new InvalidRequestException("Invalid HTTP request"));
                     ctx.close();
                     return;
                 }
 
                 if (request == null) {
                     // Incomplete request, need more data
-                    logger.debug("Request incomplete, need more data from {}", remoteAddr);
-                    key.interestOps(key.interestOps() | TransportSelectionKey.OP_READ);
+                    logger.trace("http_request_incomplete remote={}", remoteAddr);
+                    if (key != null && key.isValid()) {
+                        key.interestOps(key.interestOps() | TransportSelectionKey.OP_READ);
+                    }
                     return;
                 }
 
                 // Request parsed, process it
-                logger.info("Request parsed successfully: {} {} from {}", request.getMethod(), request.getUri(), remoteAddr);
                 request.setRemoteAddress(remoteAddr);
+                logger.debug("http_request_parsed method={} uri={} protocol={} remote={}",
+                        request.getMethod(), request.getUri(), request.getProtocolVersion(), remoteAddr);
                 parser.reset();
                 ctx.setRequest(request);
                 ctx.fireChannelRead(request);
 
                 // Stop if channel was closed during request handling
-                if (!key.isValid()) {
+                if (key != null && !key.isValid()) {
                     return;
                 }
             }
         } catch (Exception e) {
-            logger.error("Error parsing request from {}", remoteAddr, e);
+            logger.error("http_request_parse_failed remote={}", remoteAddr, e);
             ctx.close();
         } finally {
             BufferPool.DEFAULT.release(buffer);
@@ -96,7 +100,7 @@ public class HttpServerCodec implements ChannelHandler {
 
     @Override
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
-        logger.error("Exception caught in HttpServerCodec", cause);
+        logger.debug("http_codec_exception cause={}", cause != null ? cause.toString() : "unknown");
         ctx.fireExceptionCaught(cause);
     }
 }

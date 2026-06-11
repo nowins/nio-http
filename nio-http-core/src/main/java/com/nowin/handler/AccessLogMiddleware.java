@@ -58,7 +58,7 @@ public class AccessLogMiddleware implements Middleware {
         String uri = request.getUri() != null ? request.getUri() : "-";
         String protocol = request.getProtocolVersion() != null ? request.getProtocolVersion() : "HTTP/1.1";
         int status = response.getStatusCode();
-        int bodySize = response.getHttpBody() != null ? (int) response.getHttpBody().contentLength() : 0;
+        long bodySize = response.getHttpBody() != null ? response.getHttpBody().contentLength() : 0;
 
         ACCESS_LOG.info("{} - - [{}] \"{} {} {}\" {} {} {}",
                 remote,
@@ -73,16 +73,43 @@ public class AccessLogMiddleware implements Middleware {
         String remote = request.getRemoteAddress() != null ? request.getRemoteAddress() : "-";
         String method = request.getMethod() != null ? request.getMethod() : "-";
         String uri = request.getUri() != null ? request.getUri() : "-";
+        String protocol = request.getProtocolVersion() != null ? request.getProtocolVersion() : "HTTP/1.1";
         int status = response.getStatusCode();
-        int bodySize = response.getHttpBody() != null ? (int) response.getHttpBody().contentLength() : 0;
+        long bodySize = response.getHttpBody() != null ? response.getHttpBody().contentLength() : 0;
 
-        ACCESS_LOG.info("{{\"timestamp\":\"{}\",\"remote\":\"{}\",\"method\":\"{}\",\"uri\":\"{}\",\"status\":{},\"bodySize\":{},\"durationMs\":{}}}",
-                Instant.now(),
-                remote,
-                method,
-                uri,
-                status,
-                bodySize,
-                durationMs);
+        ACCESS_LOG.info("{}",
+                "{\"timestamp\":\"" + escapeJson(Instant.now().toString()) + "\"" +
+                        ",\"remote\":\"" + escapeJson(remote) + "\"" +
+                        ",\"method\":\"" + escapeJson(method) + "\"" +
+                        ",\"uri\":\"" + escapeJson(uri) + "\"" +
+                        ",\"protocol\":\"" + escapeJson(protocol) + "\"" +
+                        ",\"status\":" + status +
+                        ",\"bodySize\":" + bodySize +
+                        ",\"durationMs\":" + durationMs +
+                        "}");
+    }
+
+    private static String escapeJson(String value) {
+        StringBuilder escaped = new StringBuilder(value.length() + 16);
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            switch (c) {
+                case '"' -> escaped.append("\\\"");
+                case '\\' -> escaped.append("\\\\");
+                case '\b' -> escaped.append("\\b");
+                case '\f' -> escaped.append("\\f");
+                case '\n' -> escaped.append("\\n");
+                case '\r' -> escaped.append("\\r");
+                case '\t' -> escaped.append("\\t");
+                default -> {
+                    if (c < 0x20) {
+                        escaped.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        escaped.append(c);
+                    }
+                }
+            }
+        }
+        return escaped.toString();
     }
 }

@@ -138,10 +138,10 @@ public class Channel {
     @SuppressWarnings("resource")
     public void process(TransportSelectionKey key) {
         if (!key.isValid()) {
-            logger.debug("invalid key: {}", key);
+            logger.debug("selection_key_invalid key={}", key);
             return;
         }
-        logger.debug("Processing key: {}", key);
+        logger.trace("selection_key_processing key={}", key);
         if (key.isReadable()) {
             pipeline.fireChannelRead(key);
             return;
@@ -172,7 +172,7 @@ public class Channel {
             try {
                 return transportSocketChannel.getRemoteAddress();
             } catch (IOException e) {
-                logger.error("Error getting remote address", e);
+                logger.debug("remote_address_unavailable channel={} cause={}", transportSocketChannel, e.getMessage());
             }
         }
         return null;
@@ -231,7 +231,7 @@ public class Channel {
 
     public void onWriteCompletion() {
         if (writeQueue.isEmpty()) {
-            logger.debug("write completed");
+            logger.debug("channel_write_complete remote={} channel={}", getRemoteAddress(), transportSocketChannel);
             pipeline.completePendingWriteFutures(null);
         }
     }
@@ -258,7 +258,7 @@ public class Channel {
                     try {
                         body.close();
                     } catch (IOException e) {
-                        logger.warn("Error closing FileChannelBody on channel close", e);
+                        logger.warn("file_body_close_failed remote={} channel={}", getRemoteAddress(), transportSocketChannel, e);
                     }
                 }
             }
@@ -273,11 +273,12 @@ public class Channel {
             
             // close socket channel
             if (transportSocketChannel != null && transportSocketChannel.isOpen()) {
+                InetSocketAddress remote = getRemoteAddress();
                 transportSocketChannel.close();
-                logger.info("{} closed", transportSocketChannel);
+                logger.debug("channel_closed remote={} channel={}", remote, transportSocketChannel);
             }
         } catch (IOException e) {
-            logger.error("Error closing channel", e);
+            logger.error("channel_close_failed remote={} channel={}", getRemoteAddress(), transportSocketChannel, e);
         } finally {
             // decrement connection count
             if (connectionLimiter != null) {

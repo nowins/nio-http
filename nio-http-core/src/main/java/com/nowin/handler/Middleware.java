@@ -18,7 +18,7 @@ import java.io.IOException;
  *     long start = System.currentTimeMillis();
  *     chain.proceed(req, res);
  *     long duration = System.currentTimeMillis() - start;
- *     System.out.println(req.getMethod() + " " + req.getUri() + " took " + duration + "ms");
+ *     recordDuration(req.getMethod(), req.getUri(), duration);
  * });
  * }</pre>
  */

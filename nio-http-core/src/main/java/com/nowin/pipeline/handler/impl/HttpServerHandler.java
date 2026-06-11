@@ -53,7 +53,8 @@ public class HttpServerHandler implements ChannelHandler {
             try {
                 applicationExecutor.execute(() -> processRequest(ctx, request, startTime));
             } catch (RuntimeException e) {
-                logger.error("Failed to submit request to application executor", e);
+                logger.error("request_dispatch_failed method={} uri={} protocol={} remote={}",
+                        request.getMethod(), request.getUri(), request.getProtocolVersion(), request.getRemoteAddress(), e);
                 ctx.fireExceptionCaught(e);
                 ctx.close();
             }
@@ -75,7 +76,8 @@ public class HttpServerHandler implements ChannelHandler {
         }
         observer.onRequestStart(request);
         
-        logger.debug("Processing request: {} {}, protocol: {}", request.getMethod(), request.getUri(), request.getProtocolVersion());
+        logger.debug("request_processing_start method={} uri={} protocol={} remote={}",
+                request.getMethod(), request.getUri(), request.getProtocolVersion(), request.getRemoteAddress());
         
         HttpHandler handler = null;
         boolean routeError = false;
@@ -83,31 +85,48 @@ public class HttpServerHandler implements ChannelHandler {
         try {
             VirtualHost virtualHost = findVirtualHost(request);
             request.setVirtualHost(virtualHost);
-            logger.debug("Using virtual host: {}", virtualHost != null ? virtualHost.getHostName() : "default");
+            logger.debug("request_virtual_host method={} uri={} remote={} virtualHost={}",
+                    request.getMethod(), request.getUri(), request.getRemoteAddress(),
+                    virtualHost != null ? virtualHost.getHostName() : "default");
             
             // Route request
             if (router != null) {
                 handler = router.findHandle(request, response);
-                logger.debug("Router found handler: {}", handler != null ? handler.getClass().getName() : "null");
+                logger.debug("request_route_resolved method={} uri={} remote={} handler={}",
+                        request.getMethod(), request.getUri(), request.getRemoteAddress(),
+                        handler != null ? handler.getClass().getName() : "none");
             } else if (virtualHost != null && virtualHost.getDefaultHandler() != null) {
                 handler = virtualHost.getDefaultHandler();
-                logger.debug("Using default handler: {}", handler.getClass().getName());
+                logger.debug("request_route_default method={} uri={} remote={} handler={}",
+                        request.getMethod(), request.getUri(), request.getRemoteAddress(),
+                        handler.getClass().getName());
             } else {
-                logger.debug("No handler found, returning 404");
                 response.setStatusCode(404);
                 response.setBody("Not Found");
             }
         } catch (Exception e) {
-            logger.error("Error processing request: {} {}", request.getMethod(), request.getUri(), e);
+            logger.error("request_route_failed method={} uri={} protocol={} remote={}",
+                    request.getMethod(), request.getUri(), request.getProtocolVersion(), request.getRemoteAddress(), e);
             response.setStatusCode(500);
             response.setBody("Internal Server Error");
             routeError = true;
             failureCause = e;
         }
-        if (handler == null || routeError) {
+        if (routeError) {
             long responseTime = System.currentTimeMillis() - startTime;
-            logger.warn("No handler found for request: {} {}", request.getMethod(), request.getUri());
-            Throwable cause = failureCause != null ? failureCause : new ResourceNotFoundException();
+            observer.onRequestFailure(request, response, failureCause, responseTime);
+            logger.debug("request_processing_complete method={} uri={} protocol={} status={} durationMs={} remote={}",
+                    request.getMethod(), request.getUri(), request.getProtocolVersion(),
+                    response.getStatusCode(), responseTime, request.getRemoteAddress());
+            writeResponse(ctx, request, response);
+            return;
+        }
+        if (handler == null) {
+            long responseTime = System.currentTimeMillis() - startTime;
+            logger.debug("request_not_found method={} uri={} protocol={} status={} durationMs={} remote={}",
+                    request.getMethod(), request.getUri(), request.getProtocolVersion(),
+                    response.getStatusCode(), responseTime, request.getRemoteAddress());
+            Throwable cause = new ResourceNotFoundException();
             observer.onRequestFailure(request, response, cause, responseTime);
             writeResponse(ctx, request, response);
             return;
@@ -118,12 +137,13 @@ public class HttpServerHandler implements ChannelHandler {
             if ("TRACE".equalsIgnoreCase(request.getMethod())) {
                 handleTraceRequest(request, response);
             } else {
-                logger.debug("Calling handler: {} for request: {} {}", handler.getClass().getName(), request.getMethod(), request.getUri());
+                logger.debug("request_handler_call method={} uri={} remote={} handler={}",
+                        request.getMethod(), request.getUri(), request.getRemoteAddress(), handler.getClass().getName());
                 handler.handle(request, response);
-                logger.info("Request completed: {} {}, status: {}", request.getMethod(), request.getUri(), response.getStatusCode());
             }
         } catch (IOException e) {
-            logger.error("Error processing request: {} {}", request.getMethod(), request.getUri(), e);
+            logger.error("request_handler_failed method={} uri={} protocol={} remote={}",
+                    request.getMethod(), request.getUri(), request.getProtocolVersion(), request.getRemoteAddress(), e);
             response.setStatusCode(500);
             response.setBody("Internal Server Error");
             handlerError = true;
@@ -136,6 +156,9 @@ public class HttpServerHandler implements ChannelHandler {
         } else {
             observer.onRequestComplete(request, response, responseTime);
         }
+        logger.debug("request_processing_complete method={} uri={} protocol={} status={} durationMs={} remote={}",
+                request.getMethod(), request.getUri(), request.getProtocolVersion(),
+                response.getStatusCode(), responseTime, request.getRemoteAddress());
 
         writeResponse(ctx, request, response);
     }
@@ -171,19 +194,27 @@ public class HttpServerHandler implements ChannelHandler {
                 writeFuture = ctx.write(RESPONSE_ENCODER.encode(response));
             }
             writeFuture.addListener(future -> {
-                logger.debug("Write completed");
+                logger.debug("response_write_complete method={} uri={} protocol={} status={} remote={}",
+                        request.getMethod(), request.getUri(), request.getProtocolVersion(),
+                        response.getStatusCode(), request.getRemoteAddress());
                 try {
                     // clean up request resources
                     request.cleanup();
                 } catch (Exception e) {
-                    logger.error("Error cleaning up request resources", e);
+                    logger.error("request_cleanup_failed method={} uri={} protocol={} remote={}",
+                            request.getMethod(), request.getUri(), request.getProtocolVersion(),
+                            request.getRemoteAddress(), e);
                 }
                 if (!future.isSuccess()) {
                     if (ConnectionExceptions.isClientDisconnect(future.cause())) {
-                        logger.debug("Client disconnected before response write completed: {}",
+                        logger.debug("client_disconnected_during_write method={} uri={} status={} remote={} cause={}",
+                                request.getMethod(), request.getUri(), response.getStatusCode(),
+                                request.getRemoteAddress(),
                                 future.cause() != null ? future.cause().getMessage() : "unknown");
                     } else {
-                        logger.error("Error writing response", future.cause());
+                        logger.error("response_write_failed method={} uri={} protocol={} status={} remote={}",
+                                request.getMethod(), request.getUri(), request.getProtocolVersion(),
+                                response.getStatusCode(), request.getRemoteAddress(), future.cause());
                     }
                     ctx.close();
                     return;

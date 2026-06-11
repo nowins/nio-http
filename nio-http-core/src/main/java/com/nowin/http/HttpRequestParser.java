@@ -75,7 +75,8 @@ public class HttpRequestParser {
                         return null;
                 }
             } catch (Exception e) {
-                logger.error("Error parsing HTTP request", e);
+                logger.debug("http_parse_failed method={} uri={} protocol={} cause={}",
+                        request.getMethod(), request.getUri(), request.getProtocolVersion(), e.toString());
                 state = ParseState.ERROR;
                 return null;
             }
@@ -96,7 +97,7 @@ public class HttpRequestParser {
 
         Matcher matcher = REQUEST_LINE_PATTERN.matcher(startLine);
         if (!matcher.matches()) {
-            logger.error("Invalid request line: {}", startLine);
+            logger.debug("http_parse_invalid_start_line line={}", startLine);
             state = ParseState.ERROR;
             return false;
         }
@@ -117,13 +118,14 @@ public class HttpRequestParser {
             }
             // RFC 7230 Section 3.2.4: obs-fold (obsolete line folding) is not supported
             if (headerLine.charAt(0) == ' ' || headerLine.charAt(0) == '\t') {
-                logger.error("Obsolete line folding (obs-fold) is not supported per RFC 7230: line starts with whitespace");
+                logger.debug("http_parse_obs_fold_rejected method={} uri={}", request.getMethod(), request.getUri());
                 state = ParseState.ERROR;
                 return false;
             }
             int colonIndex = headerLine.indexOf(':');
             if (colonIndex == -1) {
-                logger.error("Invalid header line, missing colon: {}", headerLine);
+                logger.debug("http_parse_invalid_header method={} uri={} reason=missing_colon line={}",
+                        request.getMethod(), request.getUri(), headerLine);
                 state = ParseState.ERROR;
                 return false;
             }
@@ -131,14 +133,16 @@ public class HttpRequestParser {
             String value = headerLine.substring(colonIndex + 1).trim();
 
             if (!isValidHeaderName(name)) {
-                logger.error("Invalid header name: {}", name);
+                logger.debug("http_parse_invalid_header_name method={} uri={} name={}",
+                        request.getMethod(), request.getUri(), name);
                 state = ParseState.ERROR;
                 return false;
             }
             
             // verify header value
             if (!isValidHeaderValue(value)) {
-                logger.error("Invalid header value for {}: {}", name, value);
+                logger.debug("http_parse_invalid_header_value method={} uri={} name={}",
+                        request.getMethod(), request.getUri(), name);
                 state = ParseState.ERROR;
                 return false;
             }
@@ -205,15 +209,16 @@ public class HttpRequestParser {
 
         // Reject requests with both Transfer-Encoding and Content-Length (RFC 7230 sec 3.3.3)
         if (isChunked && contentLengthStr != null && !"0".equals(contentLengthStr)) {
-            logger.error("Request contains both Transfer-Encoding: chunked and Content-Length: {} — "
-                    + "rejecting to prevent request smuggling", contentLengthStr);
+            logger.warn("http_parse_request_smuggling_rejected method={} uri={} contentLength={}",
+                    request.getMethod(), request.getUri(), contentLengthStr);
             state = ParseState.ERROR;
             return false;
         }
 
         // Reject GET/HEAD/DELETE/TRACE/CONNECT with body (RFC 7230 sec 3.3)
         if (isBodylessMethod() && (isChunked || (contentLengthStr != null && !"0".equals(contentLengthStr)))) {
-            logger.error("{} request must not contain a message body", request.getMethod());
+            logger.debug("http_parse_bodyless_method_with_body method={} uri={}",
+                    request.getMethod(), request.getUri());
             state = ParseState.ERROR;
             return false;
         }
@@ -232,17 +237,20 @@ public class HttpRequestParser {
             try {
                 contentLength = Long.parseLong(contentLengthStr);
             } catch (NumberFormatException e) {
-                logger.error("Invalid Content-Length: {}", contentLengthStr);
+                logger.debug("http_parse_invalid_content_length method={} uri={} value={}",
+                        request.getMethod(), request.getUri(), contentLengthStr);
                 state = ParseState.ERROR;
                 return false;
             }
             if (contentLength < 0) {
-                logger.error("Invalid Content-Length: {}", contentLengthStr);
+                logger.debug("http_parse_invalid_content_length method={} uri={} value={}",
+                        request.getMethod(), request.getUri(), contentLengthStr);
                 state = ParseState.ERROR;
                 return false;
             }
             if (maxBodySize > 0 && contentLength > maxBodySize) {
-                logger.error("Content-Length {} exceeds maximum body size {}", contentLength, maxBodySize);
+                logger.warn("http_parse_body_too_large method={} uri={} contentLength={} maxBodySize={}",
+                        request.getMethod(), request.getUri(), contentLength, maxBodySize);
                 state = ParseState.ERROR;
                 return false;
             }
@@ -251,7 +259,10 @@ public class HttpRequestParser {
         if (lowerContentType.startsWith("multipart/form-data")) {
             String boundary = BodyParserFactory.extractBoundary(contentType);
             if (boundary == null) {
-                throw new IllegalArgumentException("Missing boundary for multipart/form-data");
+                logger.debug("http_parse_multipart_boundary_missing method={} uri={}",
+                        request.getMethod(), request.getUri());
+                state = ParseState.ERROR;
+                return false;
             }
             multipartBoundary = boundary;
             this.bodyParser = BodyParserFactory.createMultipartParser(boundary, sizeThreshold, maxBodySize);
@@ -295,7 +306,8 @@ public class HttpRequestParser {
                 }
             }
             if (multipartBoundary == null) {
-                logger.error("Missing boundary for multipart/form-data request");
+                logger.debug("http_parse_multipart_boundary_missing method={} uri={}",
+                        request.getMethod(), request.getUri());
                 state = ParseState.ERROR;
             }
             return multipartBoundary;
@@ -314,7 +326,8 @@ public class HttpRequestParser {
             int remainingBytes = buffer.remaining();
             // Check if adding this data would exceed max line length
             if (lineBuffer.size() + remainingBytes > MAX_HEADER_LINE_LENGTH) {
-                logger.error("Header line exceeds maximum length of {}", MAX_HEADER_LINE_LENGTH);
+                logger.debug("http_parse_header_line_too_long method={} uri={} maxLength={}",
+                        request.getMethod(), request.getUri(), MAX_HEADER_LINE_LENGTH);
                 state = ParseState.ERROR;
                 return false;
             }
@@ -324,7 +337,7 @@ public class HttpRequestParser {
             try {
                 lineBuffer.write(remaining);
             } catch (IOException e) {
-                logger.error("Error writing to line buffer", e);
+                logger.error("http_parse_line_buffer_write_failed", e);
                 state = ParseState.ERROR;
             }
             return false; // Not enough data yet
@@ -337,7 +350,7 @@ public class HttpRequestParser {
         try {
             lineBuffer.write(lineBytes);
         } catch (IOException e) {
-            logger.error("Error writing line to buffer", e);
+            logger.error("http_parse_line_buffer_write_failed", e);
             state = ParseState.ERROR;
             buffer.reset();
             return false;
@@ -345,7 +358,8 @@ public class HttpRequestParser {
         buffer.position(buffer.position() + 2); // Skip \r\n
         // Check if line exceeds maximum allowed length
         if (lineBuffer.size() > MAX_HEADER_LINE_LENGTH) {
-            logger.error("Header line exceeds maximum length of {}", MAX_HEADER_LINE_LENGTH);
+            logger.debug("http_parse_header_line_too_long method={} uri={} maxLength={}",
+                    request.getMethod(), request.getUri(), MAX_HEADER_LINE_LENGTH);
             state = ParseState.ERROR;
             return false;
         }
@@ -353,7 +367,8 @@ public class HttpRequestParser {
         // Update total headers bytes read (include CRLF)
         headersBytesRead += lineBuffer.size() + 2;
         if (headersBytesRead > maxHeaderSize) {
-            logger.error("Total headers size {} exceeds maximum limit of {}", headersBytesRead, maxHeaderSize);
+            logger.warn("http_parse_headers_too_large method={} uri={} bytes={} maxBytes={}",
+                    request.getMethod(), request.getUri(), headersBytesRead, maxHeaderSize);
             state = ParseState.ERROR;
             return false;
         }

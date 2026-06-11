@@ -61,7 +61,8 @@ public class UrlEncodedParser implements BodyParser {
         if (parsedBytes >= contentLength) {
             // 验证缓冲区中是否还有多余的数据（安全检查）
             if (buffer.hasRemaining()) {
-                LOGGER.warn("Buffer contains more data than expected content-length");
+                LOGGER.warn("urlencoded_body_exceeds_content_length contentLength={} parsedBytes={} remaining={}",
+                        contentLength, parsedBytes, buffer.remaining());
                 hasError = true;
                 state = State.ERROR;
                 return;
@@ -70,7 +71,8 @@ public class UrlEncodedParser implements BodyParser {
                 parseParameters();
                 state = State.COMPLETE;
             } catch (Exception e) {
-                LOGGER.error("Error parsing URL-encoded parameters", e);
+                LOGGER.debug("urlencoded_parse_failed contentLength={} parsedBytes={} cause={}",
+                        contentLength, parsedBytes, e.toString());
                 hasError = true;
                 state = State.ERROR;
             }
@@ -108,7 +110,7 @@ public class UrlEncodedParser implements BodyParser {
                 parameters.computeIfAbsent(key, k -> new ArrayList<>()).add(value);
 
             } catch (Exception e) {
-                LOGGER.error("Error parsing URL-encoded parameters", e);
+                LOGGER.debug("urlencoded_parameter_decode_failed pair={} cause={}", pair, e.toString());
                 throw e;
             }
         }

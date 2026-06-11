@@ -94,7 +94,8 @@ public class ChannelHandlerContext {
             next.handler.exceptionCaught(next, cause);
         } else {
             // Reached end of pipeline with no handler willing to handle the exception
-            logger.error("Exception escaped pipeline at {}: {}", name, cause.getMessage(), cause);
+            logger.error("pipeline_exception_escaped handler={} cause={}",
+                    name, cause != null ? cause.getMessage() : "unknown", cause);
         }
     }
 
