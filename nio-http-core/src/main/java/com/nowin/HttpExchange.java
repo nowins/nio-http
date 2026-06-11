@@ -71,4 +71,11 @@ public final class HttpExchange {
         }
         response.setBody(body);
     }
+
+    public void stream(String contentType, StreamingHandler handler) {
+        if (contentType != null && !contentType.isBlank()) {
+            response.setHeader("Content-Type", contentType);
+        }
+        response.setStreamingHandler(handler);
+    }
 }

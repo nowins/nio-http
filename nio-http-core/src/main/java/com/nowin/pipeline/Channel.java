@@ -98,6 +98,10 @@ public class Channel {
         return pendingWriteBytes.get() < writeBufferHighWaterMark;
     }
 
+    public boolean isClosed() {
+        return closed.get();
+    }
+
     public long getPendingWriteBytes() {
         return pendingWriteBytes.get();
     }

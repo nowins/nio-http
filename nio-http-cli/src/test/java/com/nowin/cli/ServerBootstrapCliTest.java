@@ -22,6 +22,13 @@ class ServerBootstrapCliTest {
                 "--host", "127.0.0.1",
                 "--port", "9090",
                 "--root", "public",
+                "--ssl-keystore", "server.p12",
+                "--ssl-password", "secret",
+                "--welcome", "home.html,index.html",
+                "--mime", "foo=application/x-foo",
+                "--mime-types", "mime.types",
+                "--no-compression",
+                "--compression-min-size", "2048",
                 "--disable-default-endpoints"
         });
 
@@ -29,6 +36,13 @@ class ServerBootstrapCliTest {
         assertEquals("127.0.0.1", options.host());
         assertEquals(9090, options.port());
         assertEquals(Path.of("public"), options.root());
+        assertEquals(Path.of("server.p12"), options.sslKeyStore());
+        assertEquals("secret", options.sslPassword());
+        assertEquals(java.util.List.of("home.html", "index.html"), options.welcomeFiles());
+        assertEquals("application/x-foo", options.mimeMappings().get("foo"));
+        assertEquals(Path.of("mime.types"), options.mimeTypesFile());
+        assertTrue(options.noCompression());
+        assertEquals(2048, options.compressionMinSize());
         assertTrue(options.disableDefaultEndpoints());
         assertFalse(options.help());
     }
@@ -41,6 +55,10 @@ class ServerBootstrapCliTest {
         assertNull(options.host());
         assertNull(options.port());
         assertEquals(Path.of("."), options.root());
+        assertTrue(options.welcomeFiles().isEmpty());
+        assertTrue(options.mimeMappings().isEmpty());
+        assertFalse(options.noCompression());
+        assertNull(options.compressionMinSize());
         assertFalse(options.disableDefaultEndpoints());
     }
 
@@ -89,5 +107,21 @@ class ServerBootstrapCliTest {
         assertEquals(0, exitCode);
         assertEquals(9091, captured.get().port());
         assertEquals(Path.of("site"), captured.get().root());
+    }
+
+    @Test
+    void rejectsInvalidMimeMapping() {
+        ByteArrayOutputStream err = new ByteArrayOutputStream();
+
+        int exitCode = ServerBootstrapCli.run(
+                new String[]{"--mime", "broken"},
+                new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8),
+                new PrintStream(err, true, StandardCharsets.UTF_8),
+                options -> {
+                    throw new AssertionError("runner should not be called");
+                });
+
+        assertEquals(2, exitCode);
+        assertTrue(err.toString(StandardCharsets.UTF_8).contains("--mime must be in ext=type form"));
     }
 }

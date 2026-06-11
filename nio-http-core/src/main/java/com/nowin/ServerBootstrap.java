@@ -22,6 +22,7 @@ import com.nowin.server.SslContext;
 import com.nowin.server.VirtualHost;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -116,11 +117,15 @@ public class ServerBootstrap {
             host = defaultVirtualHost;
         }
         if (host != null) {
-            // Clear existing and set new
-            host.getWelcomeFiles().clear();
-            for (String wf : welcomeFiles) {
-                host.addWelcomeFile(wf);
-            }
+            host.setWelcomeFiles(welcomeFiles);
+        }
+        return this;
+    }
+
+    public ServerBootstrap setDefaultWelcomeFiles(List<String> welcomeFiles) {
+        checkFrozen();
+        if (defaultVirtualHost != null) {
+            defaultVirtualHost.setWelcomeFiles(welcomeFiles);
         }
         return this;
     }
@@ -149,6 +154,16 @@ public class ServerBootstrap {
         return this;
     }
 
+    public ServerBootstrap loadMimeTypes(Path path) throws IOException {
+        checkFrozen();
+        mimeTypeResolver.loadMimeTypes(path);
+        return this;
+    }
+
+    public MimeTypeResolver getMimeTypeResolver() {
+        return mimeTypeResolver;
+    }
+
     public ServerBootstrap sslContext(SslContext sslContext) {
         checkFrozen();
         this.sslContext = sslContext;
@@ -158,6 +173,18 @@ public class ServerBootstrap {
     public ServerBootstrap ssl(String keyStorePath, String keyStorePassword) throws Exception {
         checkFrozen();
         this.sslContext = new SslContext(keyStorePath, keyStorePassword);
+        return this;
+    }
+
+    public ServerBootstrap compression(boolean enabled) {
+        checkFrozen();
+        this.config.setCompressionEnabled(enabled);
+        return this;
+    }
+
+    public ServerBootstrap compressionMinSize(int bytes) {
+        checkFrozen();
+        this.config.setCompressionMinSize(bytes);
         return this;
     }
 
@@ -231,6 +258,8 @@ public class ServerBootstrap {
             defaultVirtualHost = new VirtualHost("localhost", Paths.get("./webroot"));
             logger.info("No virtual hosts configured, using default: {}", defaultVirtualHost);
         }
+
+        applyFileAndProtocolConfig();
 
         // Create resource cache for small file caching
         ResourceCache<String, byte[]> resourceCache = new ResourceCache<>(60000, 1000);
@@ -314,6 +343,46 @@ public class ServerBootstrap {
     // Helper method for creating a default server instance
     public static ServerBootstrap create() {
         return new ServerBootstrap();
+    }
+
+    private void applyFileAndProtocolConfig() throws IOException {
+        config.validate();
+
+        if (config.getMimeTypesFile() != null && !config.getMimeTypesFile().isBlank()) {
+            mimeTypeResolver.loadMimeTypes(Paths.get(config.getMimeTypesFile()));
+        }
+
+        List<String> configuredWelcomeFiles = parseCsv(config.getStaticWelcomeFiles());
+        if (!configuredWelcomeFiles.isEmpty()) {
+            if (defaultVirtualHost != null) {
+                defaultVirtualHost.setWelcomeFiles(configuredWelcomeFiles);
+            }
+            for (VirtualHost virtualHost : virtualHosts.values()) {
+                virtualHost.setWelcomeFiles(configuredWelcomeFiles);
+            }
+        }
+
+        if (sslContext == null && config.isSslEnabled()) {
+            try {
+                sslContext = new SslContext(config.getSslKeyStorePath(), config.getSslKeyStorePassword());
+            } catch (Exception e) {
+                throw new IOException("Failed to initialize SSL context", e);
+            }
+        }
+    }
+
+    private static List<String> parseCsv(String value) {
+        if (value == null || value.isBlank()) {
+            return List.of();
+        }
+        List<String> values = new ArrayList<>();
+        for (String part : value.split(",")) {
+            String trimmed = part.trim();
+            if (!trimmed.isEmpty()) {
+                values.add(trimmed);
+            }
+        }
+        return values;
     }
 
 }

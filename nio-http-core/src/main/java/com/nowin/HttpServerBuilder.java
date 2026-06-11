@@ -6,10 +6,13 @@ import com.nowin.http.MimeTypeResolver;
 import com.nowin.server.HttpServerObserver;
 import com.nowin.server.NioHttpServer;
 import com.nowin.server.ServerConfig;
+import com.nowin.server.SslContext;
 import com.nowin.server.VirtualHost;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
@@ -24,9 +27,10 @@ import java.util.concurrent.TimeUnit;
 public final class HttpServerBuilder {
 
     private final ServerBootstrap bootstrap = ServerBootstrap.create();
-    private final MimeTypeResolver mimeTypeResolver = new MimeTypeResolver();
+    private final MimeTypeResolver mimeTypeResolver = bootstrap.getMimeTypeResolver();
     private Executor configuredExecutor;
     private boolean virtualThreads = true;
+    private List<String> welcomeFiles;
 
     HttpServerBuilder() {
     }
@@ -69,6 +73,22 @@ public final class HttpServerBuilder {
         return route("DELETE", pathPattern, handler);
     }
 
+    public HttpServerBuilder head(String pathPattern, RouteHandler handler) {
+        return route("HEAD", pathPattern, handler);
+    }
+
+    public HttpServerBuilder options(String pathPattern, RouteHandler handler) {
+        return route("OPTIONS", pathPattern, handler);
+    }
+
+    public HttpServerBuilder trace(String pathPattern, RouteHandler handler) {
+        return route("TRACE", pathPattern, handler);
+    }
+
+    public HttpServerBuilder patch(String pathPattern, RouteHandler handler) {
+        return route("PATCH", pathPattern, handler);
+    }
+
     public HttpServerBuilder use(Middleware middleware) {
         bootstrap.use(middleware);
         return this;
@@ -76,6 +96,42 @@ public final class HttpServerBuilder {
 
     public HttpServerBuilder observer(HttpServerObserver observer) {
         bootstrap.observer(observer);
+        return this;
+    }
+
+    public HttpServerBuilder ssl(String keyStorePath, String password) throws Exception {
+        bootstrap.ssl(keyStorePath, password);
+        return this;
+    }
+
+    public HttpServerBuilder sslContext(SslContext sslContext) {
+        bootstrap.sslContext(sslContext);
+        return this;
+    }
+
+    public HttpServerBuilder mimeType(String extension, String mimeType) {
+        bootstrap.addMimeTypeMapping(extension, mimeType);
+        return this;
+    }
+
+    public HttpServerBuilder welcomeFiles(String... welcomeFiles) {
+        Objects.requireNonNull(welcomeFiles, "welcomeFiles cannot be null");
+        this.welcomeFiles = Arrays.stream(welcomeFiles)
+                .filter(Objects::nonNull)
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .toList();
+        bootstrap.setDefaultWelcomeFiles(this.welcomeFiles);
+        return this;
+    }
+
+    public HttpServerBuilder compression(boolean enabled) {
+        bootstrap.compression(enabled);
+        return this;
+    }
+
+    public HttpServerBuilder compressionMinSize(int bytes) {
+        bootstrap.compressionMinSize(bytes);
         return this;
     }
 
@@ -99,7 +155,11 @@ public final class HttpServerBuilder {
 
     public HttpServerBuilder staticFiles(Path rootDirectory) {
         Objects.requireNonNull(rootDirectory, "rootDirectory cannot be null");
-        bootstrap.setDefaultVirtualHost(new VirtualHost("localhost", rootDirectory));
+        VirtualHost virtualHost = new VirtualHost("localhost", rootDirectory);
+        if (welcomeFiles != null) {
+            virtualHost.setWelcomeFiles(welcomeFiles);
+        }
+        bootstrap.setDefaultVirtualHost(virtualHost);
         bootstrap.addRoute("/*", new FileRequestHandler(mimeTypeResolver));
         return this;
     }

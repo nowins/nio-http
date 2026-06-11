@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.ServerSocket;
 import java.net.Socket;
@@ -13,6 +14,7 @@ import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -147,6 +149,63 @@ class HttpServerApiTest {
         assertEquals(false, server.isRunning());
     }
 
+    @Test
+    void streamsChunkedResponsesWithTrailers() throws Exception {
+        HttpServer server = HttpServer.builder()
+                .host("127.0.0.1")
+                .port(findAvailablePort())
+                .disableDefaultEndpoints()
+                .get("/stream", exchange -> exchange.stream("text/plain; charset=UTF-8", stream -> {
+                    stream.write("hello");
+                    stream.write(" world");
+                    stream.trailer("X-Stream-End", "yes");
+                }))
+                .build();
+
+        try {
+            server.start().join();
+
+            String response = sendRequestFully(server.address().getPort(),
+                    "GET /stream HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+
+            assertTrue(response.contains("HTTP/1.1 200 OK"));
+            assertTrue(response.contains("Transfer-Encoding: chunked"));
+            assertTrue(response.contains("5\r\nhello\r\n"));
+            assertTrue(response.contains("6\r\n world\r\n"));
+            assertTrue(response.contains("0\r\nX-Stream-End: yes\r\n\r\n"));
+        } finally {
+            server.stop().join();
+        }
+    }
+
+    @Test
+    void builderExposesCompressionAndAdditionalMethods() throws Exception {
+        String body = "x".repeat(1024);
+        HttpServer server = HttpServer.builder()
+                .host("127.0.0.1")
+                .port(findAvailablePort())
+                .disableDefaultEndpoints()
+                .compression(false)
+                .head("/head", exchange -> exchange.text(body))
+                .options("/opts", exchange -> exchange.text("opts"))
+                .trace("/trace", exchange -> exchange.text("trace"))
+                .patch("/patch", exchange -> exchange.text(body))
+                .build();
+
+        try {
+            server.start().join();
+
+            String response = sendRequest(server.address().getPort(),
+                    "PATCH /patch HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\nConnection: close\r\n\r\n");
+
+            assertTrue(response.contains("HTTP/1.1 200 OK"));
+            assertFalse(response.contains("Content-Encoding: gzip"));
+            assertTrue(response.contains(body));
+        } finally {
+            server.stop().join();
+        }
+    }
+
     private static int findAvailablePort() throws IOException {
         try (ServerSocket socket = new ServerSocket(0)) {
             return socket.getLocalPort();
@@ -164,6 +223,24 @@ class HttpServerApiTest {
             int read = socket.getInputStream().read(buffer);
             assertTrue(read > 0, "Should read response");
             return new String(buffer, 0, read, StandardCharsets.UTF_8);
+        }
+    }
+
+    private static String sendRequestFully(int port, String request) throws IOException {
+        try (Socket socket = new Socket("127.0.0.1", port);
+             OutputStream out = socket.getOutputStream();
+             InputStream in = socket.getInputStream()) {
+            socket.setSoTimeout(5000);
+            out.write(request.getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+
+            byte[] buffer = new byte[4096];
+            StringBuilder response = new StringBuilder();
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                response.append(new String(buffer, 0, read, StandardCharsets.UTF_8));
+            }
+            return response.toString();
         }
     }
 }

@@ -31,6 +31,13 @@ public class ServerConfig {
     private int tcpKeepCount;
     private int maxHeaderSize;
     private long maxBodySize;
+    private boolean sslEnabled;
+    private String sslKeyStorePath;
+    private String sslKeyStorePassword;
+    private boolean compressionEnabled;
+    private int compressionMinSize;
+    private String staticWelcomeFiles;
+    private String mimeTypesFile;
 
     public ServerConfig() {
         this.host = "0.0.0.0";
@@ -55,6 +62,13 @@ public class ServerConfig {
         this.tcpKeepCount = 9;
         this.maxHeaderSize = 65536;
         this.maxBodySize = 10 * 1024 * 1024;
+        this.sslEnabled = false;
+        this.sslKeyStorePath = null;
+        this.sslKeyStorePassword = null;
+        this.compressionEnabled = true;
+        this.compressionMinSize = 512;
+        this.staticWelcomeFiles = null;
+        this.mimeTypesFile = null;
     }
 
     /**
@@ -109,6 +123,12 @@ public class ServerConfig {
         if (maxBodySize < 0) {
             throw new IllegalArgumentException("Max body size must be >= 0, got: " + maxBodySize);
         }
+        if (compressionMinSize < 0) {
+            throw new IllegalArgumentException("Compression min size must be >= 0, got: " + compressionMinSize);
+        }
+        if (sslEnabled && (sslKeyStorePath == null || sslKeyStorePath.isBlank())) {
+            throw new IllegalArgumentException("SSL key store path must be set when SSL is enabled");
+        }
     }
 
     /**
@@ -138,6 +158,13 @@ public class ServerConfig {
         copy.tcpKeepCount = this.tcpKeepCount;
         copy.maxHeaderSize = this.maxHeaderSize;
         copy.maxBodySize = this.maxBodySize;
+        copy.sslEnabled = this.sslEnabled;
+        copy.sslKeyStorePath = this.sslKeyStorePath;
+        copy.sslKeyStorePassword = this.sslKeyStorePassword;
+        copy.compressionEnabled = this.compressionEnabled;
+        copy.compressionMinSize = this.compressionMinSize;
+        copy.staticWelcomeFiles = this.staticWelcomeFiles;
+        copy.mimeTypesFile = this.mimeTypesFile;
         return copy;
     }
 
@@ -194,6 +221,21 @@ public class ServerConfig {
         props.setProperty("server.tcpKeepCount", String.valueOf(tcpKeepCount));
         props.setProperty("server.maxHeaderSize", String.valueOf(maxHeaderSize));
         props.setProperty("server.maxBodySize", String.valueOf(maxBodySize));
+        props.setProperty("ssl.enabled", String.valueOf(sslEnabled));
+        if (sslKeyStorePath != null) {
+            props.setProperty("ssl.keyStorePath", sslKeyStorePath);
+        }
+        if (sslKeyStorePassword != null) {
+            props.setProperty("ssl.keyStorePassword", sslKeyStorePassword);
+        }
+        props.setProperty("compression.enabled", String.valueOf(compressionEnabled));
+        props.setProperty("compression.minSize", String.valueOf(compressionMinSize));
+        if (staticWelcomeFiles != null) {
+            props.setProperty("static.welcomeFiles", staticWelcomeFiles);
+        }
+        if (mimeTypesFile != null) {
+            props.setProperty("mime.typesFile", mimeTypesFile);
+        }
         return props;
     }
 
@@ -263,6 +305,27 @@ public class ServerConfig {
         }
         if (props.containsKey("server.maxBodySize")) {
             this.maxBodySize = Long.parseLong(props.getProperty("server.maxBodySize"));
+        }
+        if (props.containsKey("ssl.enabled")) {
+            this.sslEnabled = Boolean.parseBoolean(props.getProperty("ssl.enabled"));
+        }
+        if (props.containsKey("ssl.keyStorePath")) {
+            this.sslKeyStorePath = props.getProperty("ssl.keyStorePath");
+        }
+        if (props.containsKey("ssl.keyStorePassword")) {
+            this.sslKeyStorePassword = props.getProperty("ssl.keyStorePassword");
+        }
+        if (props.containsKey("compression.enabled")) {
+            this.compressionEnabled = Boolean.parseBoolean(props.getProperty("compression.enabled"));
+        }
+        if (props.containsKey("compression.minSize")) {
+            this.compressionMinSize = Integer.parseInt(props.getProperty("compression.minSize"));
+        }
+        if (props.containsKey("static.welcomeFiles")) {
+            this.staticWelcomeFiles = props.getProperty("static.welcomeFiles");
+        }
+        if (props.containsKey("mime.typesFile")) {
+            this.mimeTypesFile = props.getProperty("mime.typesFile");
         }
     }
 
@@ -464,6 +527,69 @@ public class ServerConfig {
         return this;
     }
 
+    public boolean isSslEnabled() {
+        return sslEnabled;
+    }
+
+    public ServerConfig setSslEnabled(boolean sslEnabled) {
+        this.sslEnabled = sslEnabled;
+        return this;
+    }
+
+    public String getSslKeyStorePath() {
+        return sslKeyStorePath;
+    }
+
+    public ServerConfig setSslKeyStorePath(String sslKeyStorePath) {
+        this.sslKeyStorePath = sslKeyStorePath;
+        return this;
+    }
+
+    public String getSslKeyStorePassword() {
+        return sslKeyStorePassword;
+    }
+
+    public ServerConfig setSslKeyStorePassword(String sslKeyStorePassword) {
+        this.sslKeyStorePassword = sslKeyStorePassword;
+        return this;
+    }
+
+    public boolean isCompressionEnabled() {
+        return compressionEnabled;
+    }
+
+    public ServerConfig setCompressionEnabled(boolean compressionEnabled) {
+        this.compressionEnabled = compressionEnabled;
+        return this;
+    }
+
+    public int getCompressionMinSize() {
+        return compressionMinSize;
+    }
+
+    public ServerConfig setCompressionMinSize(int compressionMinSize) {
+        this.compressionMinSize = compressionMinSize;
+        return this;
+    }
+
+    public String getStaticWelcomeFiles() {
+        return staticWelcomeFiles;
+    }
+
+    public ServerConfig setStaticWelcomeFiles(String staticWelcomeFiles) {
+        this.staticWelcomeFiles = staticWelcomeFiles;
+        return this;
+    }
+
+    public String getMimeTypesFile() {
+        return mimeTypesFile;
+    }
+
+    public ServerConfig setMimeTypesFile(String mimeTypesFile) {
+        this.mimeTypesFile = mimeTypesFile;
+        return this;
+    }
+
     @Override
     public String toString() {
         return "ServerConfig{" +
@@ -489,6 +615,12 @@ public class ServerConfig {
                 ", tcpKeepCount=" + tcpKeepCount +
                 ", maxHeaderSize=" + maxHeaderSize +
                 ", maxBodySize=" + maxBodySize +
+                ", sslEnabled=" + sslEnabled +
+                ", sslKeyStorePath='" + sslKeyStorePath + '\'' +
+                ", compressionEnabled=" + compressionEnabled +
+                ", compressionMinSize=" + compressionMinSize +
+                ", staticWelcomeFiles='" + staticWelcomeFiles + '\'' +
+                ", mimeTypesFile='" + mimeTypesFile + '\'' +
                 '}';
     }
 }

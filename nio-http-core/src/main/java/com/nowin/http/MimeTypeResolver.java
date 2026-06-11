@@ -2,14 +2,16 @@ package com.nowin.http;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Properties;
 import java.util.regex.Pattern;
 
 public class MimeTypeResolver {
@@ -67,16 +69,8 @@ public class MimeTypeResolver {
         // Try to load from resource first
         try (InputStream is = getClass().getResourceAsStream(MIME_TYPES_RESOURCE)) {
             if (is != null) {
-                Properties props = new Properties();
-                props.load(is);
-                for (String key : props.stringPropertyNames()) {
-                    mimeTypes.put(key, props.getProperty(key));
-                    String mimeType = props.getProperty(key).split("; ")[0];
-                    if (!extensionsByMimeType.containsKey(mimeType)) {
-                        extensionsByMimeType.put(mimeType, key);
-                    }
-                }
-                logger.info("Loaded {} mime types from resource {}", props.size(), MIME_TYPES_RESOURCE);
+                int count = loadMimeTypes(is);
+                logger.info("Loaded {} mime types from resource {}", count, MIME_TYPES_RESOURCE);
                 return;
             }
         } catch (IOException e) {
@@ -86,17 +80,68 @@ public class MimeTypeResolver {
         // Fallback to system mime.types file (for standalone use)
         Path systemMimeTypes = Paths.get("mime.types");
         if (Files.exists(systemMimeTypes)) {
-            try (InputStream is = Files.newInputStream(systemMimeTypes)) {
-                Properties props = new Properties();
-                props.load(is);
-                for (String key : props.stringPropertyNames()) {
-                    mimeTypes.put(key, props.getProperty(key));
-                }
-                logger.info("Loaded {} mime types from system file {}", props.size(), systemMimeTypes);
+            try {
+                int count = loadMimeTypes(systemMimeTypes);
+                logger.info("Loaded {} mime types from system file {}", count, systemMimeTypes);
             } catch (IOException e) {
                 logger.warn("Failed to load mime types from system file {}", systemMimeTypes, e);
             }
         }
+    }
+
+    public int loadMimeTypes(Path path) throws IOException {
+        try (InputStream is = Files.newInputStream(path)) {
+            return loadMimeTypes(is);
+        }
+    }
+
+    public int loadMimeTypes(InputStream inputStream) throws IOException {
+        int count = 0;
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                count += parseMimeTypeLine(line);
+            }
+        }
+        return count;
+    }
+
+    private int parseMimeTypeLine(String rawLine) {
+        String line = rawLine;
+        int commentIndex = line.indexOf('#');
+        if (commentIndex >= 0) {
+            line = line.substring(0, commentIndex);
+        }
+        line = line.trim();
+        if (line.isEmpty()) {
+            return 0;
+        }
+
+        if (line.contains("=")) {
+            String[] parts = line.split("=", 2);
+            String extension = normalizeExtension(parts[0]);
+            String mimeType = parts[1].trim();
+            if (!extension.isEmpty() && !mimeType.isEmpty()) {
+                addMimeTypeMapping(extension, mimeType);
+                return 1;
+            }
+            return 0;
+        }
+
+        String[] parts = line.split("\\s+");
+        if (parts.length < 2) {
+            return 0;
+        }
+        String mimeType = parts[0];
+        int count = 0;
+        for (int i = 1; i < parts.length; i++) {
+            String extension = normalizeExtension(parts[i]);
+            if (!extension.isEmpty()) {
+                addMimeTypeMapping(extension, mimeType);
+                count++;
+            }
+        }
+        return count;
     }
 
     public String getMimeType(String fileName) {
@@ -134,10 +179,19 @@ public class MimeTypeResolver {
         if (extension == null || extension.isEmpty() || mimeType == null || mimeType.isEmpty()) {
             return;
         }
-        mimeTypes.put(extension.toLowerCase(), mimeType);
+        String normalizedExtension = normalizeExtension(extension);
+        mimeTypes.put(normalizedExtension, mimeType);
         String baseType = mimeType.split("; ")[0];
         if (!extensionsByMimeType.containsKey(baseType)) {
-            extensionsByMimeType.put(baseType, extension.toLowerCase());
+            extensionsByMimeType.put(baseType, normalizedExtension);
         }
+    }
+
+    private static String normalizeExtension(String extension) {
+        String normalized = extension == null ? "" : extension.trim().toLowerCase();
+        while (normalized.startsWith(".")) {
+            normalized = normalized.substring(1);
+        }
+        return normalized;
     }
 }

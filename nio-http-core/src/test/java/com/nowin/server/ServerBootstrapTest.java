@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.net.ServerSocket;
+import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -58,5 +60,25 @@ public class ServerBootstrapTest {
 
         // All good before start
         assertDoesNotThrow(() -> bootstrap.addRoute("/b", (request, response) -> {}));
+    }
+
+    @Test
+    void setWelcomeFilesReplacesExistingDefaults() {
+        VirtualHost host = new VirtualHost("localhost", Path.of("."));
+        ServerBootstrap.create()
+                .setDefaultVirtualHost(host)
+                .setWelcomeFiles("localhost", List.of("home.html"));
+
+        assertEquals(List.of("home.html"), host.getWelcomeFiles());
+    }
+
+    @Test
+    void addWelcomeFileAppendsToDefaults() {
+        VirtualHost host = new VirtualHost("localhost", Path.of("."));
+        ServerBootstrap.create()
+                .setDefaultVirtualHost(host)
+                .addWelcomeFile("localhost", "home.html");
+
+        assertEquals(List.of("index.html", "index.htm", "home.html"), host.getWelcomeFiles());
     }
 }

@@ -124,6 +124,16 @@ final class RadixTree {
         return node != null ? node.handler : null;
     }
 
+    Set<String> findAllowedMethods(String path) {
+        String[] segments = path.split("/");
+        Map<String, String> params = new HashMap<>();
+        Node node = findNode(root, segments, 1, params);
+        if (node == null || node.methods == null) {
+            return Set.of();
+        }
+        return Set.copyOf(node.methods);
+    }
+
     /**
      * Check if an exact path pattern is registered.
      */

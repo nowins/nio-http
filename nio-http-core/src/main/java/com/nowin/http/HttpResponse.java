@@ -1,5 +1,6 @@
 package com.nowin.http;
 
+import com.nowin.StreamingHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.nio.ByteBuffer;
@@ -58,6 +59,7 @@ public class HttpResponse {
     private HttpBody httpBody;
     private List<byte[]> chunks;
     private boolean chunkedEncoding = false;
+    private StreamingHandler streamingHandler;
     private boolean headersWritten = false;
     private int chunkSize = DEFAULT_CHUNK_SIZE;
 
@@ -167,6 +169,7 @@ public class HttpResponse {
 
     public void setBody(HttpBody body) {
         closeOldBody();
+        this.streamingHandler = null;
         this.httpBody = body;
         if (isBodyAllowed() && !chunkedEncoding && httpBody != null) {
             setHeader("Content-Length", String.valueOf(httpBody.contentLength()));
@@ -179,6 +182,7 @@ public class HttpResponse {
 
     public void setBody(String body, java.nio.charset.Charset charset) {
         closeOldBody();
+        this.streamingHandler = null;
         byte[] bytes = body.getBytes(charset);
         this.httpBody = new ByteArrayBody(bytes);
         if (isBodyAllowed() && !chunkedEncoding) {
@@ -215,6 +219,7 @@ public class HttpResponse {
 
     public void setBody(byte[] body) {
         closeOldBody();
+        this.streamingHandler = null;
         byte[] bytes = body != null ? body.clone() : new byte[0];
         this.httpBody = new ByteArrayBody(bytes);
         if (isBodyAllowed() && !chunkedEncoding) {
@@ -241,10 +246,10 @@ public class HttpResponse {
         if (chunkedEncoding) {
             this.chunks = new ArrayList<>();
             setHeader("Transfer-Encoding", "chunked");
-            headers.remove("Content-Length");
+            headers.remove("content-length");
         } else {
             this.chunks = null;
-            headers.remove("Transfer-Encoding");
+            headers.remove("transfer-encoding");
             if (isBodyAllowed()) {
                 setHeader("Content-Length", String.valueOf(httpBody != null ? httpBody.contentLength() : 0));
             }
@@ -252,8 +257,14 @@ public class HttpResponse {
     }
 
     public void enableCompressionIfSupported(HttpRequest request) {
+        enableCompressionIfSupported(request, true, 512);
+    }
+
+    public void enableCompressionIfSupported(HttpRequest request, boolean enabled, int minSize) {
+        if (!enabled) return;
+        if (streamingHandler != null) return;
         if (chunkedEncoding && chunks != null && !chunks.isEmpty()) return;
-        if (httpBody == null || httpBody.contentLength() == 0 || httpBody.contentLength() < 512) return;
+        if (httpBody == null || httpBody.contentLength() == 0 || httpBody.contentLength() < minSize) return;
         if (!(httpBody instanceof ByteArrayBody)) return;
 
         String contentType = getHeader("Content-Type");
@@ -352,6 +363,21 @@ public class HttpResponse {
             setChunkedEncoding(true);
         }
         this.chunks.add(Arrays.copyOf(chunk, chunk.length));
+    }
+
+    public StreamingHandler getStreamingHandler() {
+        return streamingHandler;
+    }
+
+    public void setStreamingHandler(StreamingHandler streamingHandler) {
+        this.streamingHandler = Objects.requireNonNull(streamingHandler, "streamingHandler cannot be null");
+        closeOldBody();
+        this.httpBody = null;
+        setChunkedEncoding(true);
+    }
+
+    public boolean isStreaming() {
+        return streamingHandler != null;
     }
 
     /**
@@ -475,6 +501,29 @@ public class HttpResponse {
         byte[] headersBytes = serializeHeaders();
         boolean useChunkedEncoding = chunkedEncoding && !protocolVersion.equalsIgnoreCase("HTTP/1.0");
         return useChunkedEncoding ? assembleChunkedResponse(headersBytes) : assembleRegularResponse(headersBytes);
+    }
+
+    public ByteBuffer toHeadersByteBuffer() {
+        if (protocolVersion.equalsIgnoreCase("HTTP/1.0")) {
+            this.chunkedEncoding = false;
+            headers.remove("transfer-encoding");
+            if (isBodyAllowed()) {
+                headers.remove("content-length");
+                setHeader("Connection", "close");
+            }
+        } else if (chunkedEncoding) {
+            setHeader("Transfer-Encoding", "chunked");
+            headers.remove("content-length");
+        } else if (isBodyAllowed() && !headers.containsKey("content-length")) {
+            setHeader("Content-Length", "0");
+        }
+        setHeader("Date", DATE_FORMAT.format(Instant.now()));
+        byte[] headersBytes = serializeHeaders();
+        ByteBuffer buffer = allocateResponseBuffer(headersBytes.length);
+        buffer.put(headersBytes);
+        buffer.flip();
+        headersWritten = true;
+        return buffer;
     }
 
     private byte[] serializeHeaders() {

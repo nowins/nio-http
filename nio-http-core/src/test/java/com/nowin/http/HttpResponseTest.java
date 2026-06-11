@@ -544,5 +544,17 @@ class HttpResponseTest {
         assertFalse(responseStr.contains("Mon, 01 Jan 2020 00:00:00 GMT"), "Stale Date should be overwritten");
         assertTrue(responseStr.contains("Date: "), "Date header should be present");
     }
+
+    @Test
+    void testChunkedEncodingRemovesContentLengthCaseInsensitively() {
+        response.setBody("Hello");
+        response.setChunkedEncoding(true);
+
+        ByteBuffer buffer = response.toByteBuffer();
+        String responseStr = StandardCharsets.UTF_8.decode(buffer).toString();
+
+        assertTrue(responseStr.contains("Transfer-Encoding: chunked"));
+        assertFalse(responseStr.toLowerCase().contains("content-length"));
+    }
 }
 

@@ -58,6 +58,17 @@ public class Router {
         String path = request.getUri().split("\\?")[0]; // Remove query parameters
         RadixTree.MatchResult result = radixTree.find(path, request.getMethod());
         if (result == null) {
+            if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
+                Set<String> allowedMethods = radixTree.findAllowedMethods(path);
+                if (!allowedMethods.isEmpty()) {
+                    return (req, res) -> {
+                        res.setStatusCode(200);
+                        res.setHeader("Allow", String.join(", ", new TreeSet<>(allowedMethods)));
+                        res.setHeader("Content-Length", "0");
+                        res.setBody("");
+                    };
+                }
+            }
             return defaultHandler;
         }
         // Populate path parameters into the request

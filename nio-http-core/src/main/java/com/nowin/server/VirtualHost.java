@@ -42,6 +42,16 @@ public class VirtualHost {
         }
     }
 
+    public void setWelcomeFiles(List<String> welcomeFiles) {
+        this.welcomeFiles.clear();
+        if (welcomeFiles == null) {
+            return;
+        }
+        for (String welcomeFile : welcomeFiles) {
+            addWelcomeFile(welcomeFile);
+        }
+    }
+
     public boolean isDirectoryListingEnabled() {
         return directoryListingEnabled;
     }

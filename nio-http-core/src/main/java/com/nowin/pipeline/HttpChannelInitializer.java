@@ -71,7 +71,13 @@ public class HttpChannelInitializer implements ChannelInitializer {
         pipeline.addLast("upgrade", new HttpUpgradeHandler());
 
         pipeline.addLast("codec", new HttpServerCodec(config.getMaxHeaderSize(), config.getMaxBodySize()));
-        pipeline.addLast("handler", new HttpServerHandler(virtualHosts, defaultVirtualHost, router, applicationExecutor));
+        pipeline.addLast("handler", new HttpServerHandler(
+                virtualHosts,
+                defaultVirtualHost,
+                router,
+                applicationExecutor,
+                config.isCompressionEnabled(),
+                config.getCompressionMinSize()));
         pipeline.addLast("exceptionHandler", new ExceptionHandler());
     }
 }

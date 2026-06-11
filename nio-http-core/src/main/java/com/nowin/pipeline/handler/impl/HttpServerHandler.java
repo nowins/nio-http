@@ -1,6 +1,8 @@
 package com.nowin.pipeline.handler.impl;
 
 import com.nowin.exception.ResourceNotFoundException;
+import com.nowin.HttpStream;
+import com.nowin.StreamingHandler;
 import com.nowin.handler.HttpHandler;
 import com.nowin.http.HttpRequest;
 import com.nowin.http.HttpResponse;
@@ -18,8 +20,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.io.InterruptedIOException;
+import java.nio.ByteBuffer;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class HttpServerHandler implements ChannelHandler {
 
@@ -30,6 +38,8 @@ public class HttpServerHandler implements ChannelHandler {
     private final Map<String, VirtualHost> virtualHosts;
     private final VirtualHost defaultVirtualHost;
     private final Executor applicationExecutor;
+    private final boolean compressionEnabled;
+    private final int compressionMinSize;
 
     public HttpServerHandler(Map<String, VirtualHost> virtualHosts, VirtualHost defaultVirtualHost, Router router) {
         this(virtualHosts, defaultVirtualHost, router, null);
@@ -39,10 +49,21 @@ public class HttpServerHandler implements ChannelHandler {
                              VirtualHost defaultVirtualHost,
                              Router router,
                              Executor applicationExecutor) {
+        this(virtualHosts, defaultVirtualHost, router, applicationExecutor, true, 512);
+    }
+
+    public HttpServerHandler(Map<String, VirtualHost> virtualHosts,
+                             VirtualHost defaultVirtualHost,
+                             Router router,
+                             Executor applicationExecutor,
+                             boolean compressionEnabled,
+                             int compressionMinSize) {
         this.router = router;
         this.virtualHosts = virtualHosts;
         this.defaultVirtualHost = defaultVirtualHost;
         this.applicationExecutor = applicationExecutor;
+        this.compressionEnabled = compressionEnabled;
+        this.compressionMinSize = compressionMinSize;
     }
 
     @Override
@@ -166,12 +187,12 @@ public class HttpServerHandler implements ChannelHandler {
     private void writeResponse(ChannelHandlerContext ctx, HttpRequest request, HttpResponse response) {
         Runnable writeTask = () -> {
             // Auto-enable compression for applicable responses
-            if (!"HEAD".equalsIgnoreCase(request.getMethod())) {
-                response.enableCompressionIfSupported(request);
+            if (!"HEAD".equalsIgnoreCase(request.getMethod()) && !response.isStreaming()) {
+                response.enableCompressionIfSupported(request, compressionEnabled, compressionMinSize);
             }
 
             // HEAD must not return a body, but Content-Length should match GET
-            if ("HEAD".equalsIgnoreCase(request.getMethod())) {
+            if ("HEAD".equalsIgnoreCase(request.getMethod()) && !response.isStreaming()) {
                 String contentLength = response.getHeader("Content-Length");
                 response.setBody(new byte[0]);
                 if (contentLength != null) {
@@ -184,6 +205,11 @@ public class HttpServerHandler implements ChannelHandler {
                 response.setHeader("Connection", "keep-alive");
             } else {
                 response.setHeader("Connection", "close");
+            }
+
+            if (response.isStreaming()) {
+                writeStreamingResponse(ctx, request, response);
+                return;
             }
 
             ChannelFuture writeFuture = null;
@@ -236,6 +262,89 @@ public class HttpServerHandler implements ChannelHandler {
             ctx.channel().getEventLoop().execute(writeTask);
         } else {
             writeTask.run();
+        }
+    }
+
+    private void writeStreamingResponse(ChannelHandlerContext ctx, HttpRequest request, HttpResponse response) {
+        ChannelFuture headerFuture = ctx.write(response.toHeadersByteBuffer());
+        headerFuture.addListener(future -> {
+            if (!future.isSuccess()) {
+                cleanupAfterWrite(ctx, request, response, future.cause());
+                return;
+            }
+            if ("HEAD".equalsIgnoreCase(request.getMethod())) {
+                cleanupAfterWrite(ctx, request, response, null);
+                if (!request.isKeepAlive()) {
+                    ctx.close();
+                }
+                return;
+            }
+            runStreamingProducer(ctx, request, response);
+        });
+    }
+
+    private void runStreamingProducer(ChannelHandlerContext ctx, HttpRequest request, HttpResponse response) {
+        Runnable producerTask = () -> {
+            StreamingHandler producer = response.getStreamingHandler();
+            StreamingHttpStream stream = new StreamingHttpStream(ctx, response, request);
+            Throwable failure = null;
+            try {
+                producer.stream(stream);
+            } catch (Throwable e) {
+                failure = e;
+                logger.error("streaming_response_failed method={} uri={} protocol={} remote={}",
+                        request.getMethod(), request.getUri(), request.getProtocolVersion(), request.getRemoteAddress(), e);
+            } finally {
+                try {
+                    stream.close();
+                } catch (IOException e) {
+                    if (failure == null) {
+                        failure = e;
+                    } else {
+                        failure.addSuppressed(e);
+                    }
+                }
+                cleanupAfterWrite(ctx, request, response, failure);
+                if (failure != null || !request.isKeepAlive()) {
+                    ctx.close();
+                }
+            }
+        };
+
+        if (applicationExecutor != null) {
+            try {
+                applicationExecutor.execute(producerTask);
+            } catch (RuntimeException e) {
+                logger.error("streaming_dispatch_failed method={} uri={} protocol={} remote={}",
+                        request.getMethod(), request.getUri(), request.getProtocolVersion(), request.getRemoteAddress(), e);
+                cleanupAfterWrite(ctx, request, response, e);
+                ctx.close();
+            }
+        } else {
+            Thread.startVirtualThread(producerTask);
+        }
+    }
+
+    private void cleanupAfterWrite(ChannelHandlerContext ctx, HttpRequest request, HttpResponse response, Throwable failure) {
+        if (failure == null) {
+            logger.debug("response_write_complete method={} uri={} protocol={} status={} remote={}",
+                    request.getMethod(), request.getUri(), request.getProtocolVersion(),
+                    response.getStatusCode(), request.getRemoteAddress());
+        } else if (ConnectionExceptions.isClientDisconnect(failure)) {
+            logger.debug("client_disconnected_during_write method={} uri={} status={} remote={} cause={}",
+                    request.getMethod(), request.getUri(), response.getStatusCode(), request.getRemoteAddress(),
+                    failure.getMessage());
+        } else {
+            logger.error("response_write_failed method={} uri={} protocol={} status={} remote={}",
+                    request.getMethod(), request.getUri(), request.getProtocolVersion(),
+                    response.getStatusCode(), request.getRemoteAddress(), failure);
+        }
+        try {
+            request.cleanup();
+        } catch (Exception e) {
+            logger.error("request_cleanup_failed method={} uri={} protocol={} remote={}",
+                    request.getMethod(), request.getUri(), request.getProtocolVersion(),
+                    request.getRemoteAddress(), e);
         }
     }
 
@@ -296,5 +405,107 @@ public class HttpServerHandler implements ChannelHandler {
         response.setStatusCode(200);
         response.setHeader("Content-Type", "message/http");
         response.setBody(trace.toString());
+    }
+
+    private static final class StreamingHttpStream implements HttpStream {
+        private static final long WRITE_WAIT_TIMEOUT_SECONDS = 30;
+
+        private final ChannelHandlerContext ctx;
+        private final HttpResponse response;
+        private final HttpRequest request;
+        private final AtomicBoolean closed = new AtomicBoolean(false);
+
+        private StreamingHttpStream(ChannelHandlerContext ctx, HttpResponse response, HttpRequest request) {
+            this.ctx = ctx;
+            this.response = response;
+            this.request = request;
+        }
+
+        @Override
+        public void write(byte[] chunk) throws IOException {
+            if (closed.get()) {
+                throw new IOException("stream is closed");
+            }
+            if (chunk == null || chunk.length == 0) {
+                return;
+            }
+            awaitWritable();
+            ByteBuffer buffer = response.getProtocolVersion().equalsIgnoreCase("HTTP/1.0")
+                    ? ByteBuffer.wrap(chunk.clone())
+                    : RESPONSE_ENCODER.encodeChunk(response, chunk);
+            writeAndWait(buffer);
+        }
+
+        @Override
+        public void flush() throws IOException {
+            awaitWritable();
+        }
+
+        @Override
+        public void trailer(String name, String value) {
+            response.setTrailer(name, value);
+        }
+
+        @Override
+        public void close() throws IOException {
+            if (!closed.compareAndSet(false, true)) {
+                return;
+            }
+            if (!response.getProtocolVersion().equalsIgnoreCase("HTTP/1.0")) {
+                writeAndWait(RESPONSE_ENCODER.encodeFinalChunk(response));
+            }
+        }
+
+        private void awaitWritable() throws IOException {
+            while (ctx.channel() != null && !ctx.channel().isClosed() && !ctx.channel().isWritable()) {
+                try {
+                    Thread.sleep(1);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    InterruptedIOException interrupted = new InterruptedIOException("interrupted while waiting for stream backpressure");
+                    interrupted.initCause(e);
+                    throw interrupted;
+                }
+            }
+            if (ctx.channel() == null || ctx.channel().isClosed()) {
+                throw new IOException("channel is closed");
+            }
+        }
+
+        private void writeAndWait(ByteBuffer buffer) throws IOException {
+            CountDownLatch latch = new CountDownLatch(1);
+            AtomicReference<Throwable> failure = new AtomicReference<>();
+            Runnable writeTask = () -> {
+                ChannelFuture future = ctx.write(buffer);
+                future.addListener(done -> {
+                    if (!done.isSuccess()) {
+                        failure.set(done.cause());
+                    }
+                    latch.countDown();
+                });
+            };
+            if (ctx.channel().getEventLoop() != null && !ctx.channel().getEventLoop().inEventLoop()) {
+                ctx.channel().getEventLoop().execute(writeTask);
+            } else {
+                writeTask.run();
+            }
+            try {
+                if (!latch.await(WRITE_WAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                    throw new IOException("timed out while writing streaming response for " + request.getUri());
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                InterruptedIOException interrupted = new InterruptedIOException("interrupted while writing streaming response");
+                interrupted.initCause(e);
+                throw interrupted;
+            }
+            Throwable cause = failure.get();
+            if (cause != null) {
+                if (cause instanceof IOException io) {
+                    throw io;
+                }
+                throw new IOException("streaming response write failed", cause);
+            }
+        }
     }
 }
